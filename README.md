@@ -1,5 +1,6 @@
-# edit
 
+# edit
+## [read in english](https://github.com/NelikKKL/Edit/blob/master/ENGLISH.md)
 Редактор текста написаный на Rust с возможность поставить темную и светлую тему, поддерживает пользовательский css. может служить редактором кода
 
 # Функции
