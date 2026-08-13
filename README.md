@@ -37,6 +37,10 @@ edit-editor/
 ├── linux/edit.desktop       # ярлык приложения для Ubuntu/GNOME
 └── .github/workflows/build.yml  # CI: собирает .exe, установщик и .deb
 ```
+# Preview
+
+![Альтернативный текст](URL_изображения)
+
 
 ## Своя тема (CSS)
 
