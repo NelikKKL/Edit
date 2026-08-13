@@ -20,7 +20,12 @@ edit-editor/
 ├── build.rs               # встраивает .ico в edit.exe на Windows
 ├── assets/
 │   ├── icon.ico            # иконка Windows (мульти-разрешение)
-│   └── icon.png            
+│   └── icon.png
+├── img
+|    ├── image.png
+|    ├── image(1).png
+|    ├── image(2).png
+|    ├── image(3).png
 ├── src/
 │   ├── main.rs             # точка входа, without console на Windows
 │   ├── app.rs              # вся раскладка: заголовок, тулбар, вкладки, редактор
