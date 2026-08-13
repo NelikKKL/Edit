@@ -40,9 +40,9 @@ edit-editor/
 # Preview
 
 ![Поиск](img/image.png)
-![Настройки](img/image(1))
-![Интерфейс в другой теме](img/image(2))
-![Другой шрифт](img/image(3))
+![Настройки](img/image(1).png)
+![Интерфейс в другой теме](img/image(2).png)
+![Другой шрифт](img/image(3).png)
 
 
 ## Своя тема (CSS)
