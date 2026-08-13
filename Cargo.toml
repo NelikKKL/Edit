@@ -1,0 +1,48 @@
+[package]
+name = "edit"
+version = "0.1.0"
+edition = "2021"
+description = "A fast, modern text editor (Notepad alternative)"
+authors = ["edit"]
+build = "build.rs"
+
+[[bin]]
+name = "edit"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.28", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = "0.28"
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+rfd = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+dirs = "5"
+ttf-parser = "0.20"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# ---- Linux .deb packaging (built with `cargo install cargo-deb && cargo deb`) ----
+[package.metadata.deb]
+maintainer = "edit"
+copyright = "2026"
+license-file = ["LICENSE", "0"]
+extended-description = "edit — a fast, modern, notepad-style text editor with syntax highlighting, tabs, a file tree, and CSS-based theming."
+depends = "$auto"
+section = "editors"
+priority = "optional"
+assets = [
+    ["target/release/edit", "usr/bin/", "755"],
+    ["linux/edit.desktop", "usr/share/applications/", "644"],
+    ["assets/icon.png", "usr/share/icons/hicolor/256x256/apps/edit.png", "644"],
+]

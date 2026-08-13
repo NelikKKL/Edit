@@ -1,0 +1,94 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release exe
+        run: cargo build --release --locked
+
+      - name: Upload raw exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: edit-windows-exe
+          path: target/release/edit.exe
+
+      - name: Build Windows installer (Inno Setup)
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+        with:
+          path: installer/setup.iss
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: edit-windows-installer
+          path: installer/Output/edit-setup-windows.exe
+
+  build-linux-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system deps for eframe/egui (glow/x11/wayland backends)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libwayland-dev \
+            libssl-dev \
+            libfontconfig1-dev
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build .deb
+        run: cargo deb
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: edit-linux-deb
+          path: target/debian/*.deb
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-linux-deb]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release with all build outputs
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/edit-windows-exe/edit.exe
+            artifacts/edit-windows-installer/edit-setup-windows.exe
+            artifacts/edit-linux-deb/*.deb

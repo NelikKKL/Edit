@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=edit
+GenericName=Text Editor
+Comment=A fast, modern text editor
+Exec=edit %f
+Icon=edit
+Terminal=false
+Categories=Utility;TextEditor;Development;
+MimeType=text/plain;text/x-python;text/x-csrc;text/x-c++src;text/x-rustsrc;text/markdown;application/json;application/x-yaml;text/x-shellscript;text/html;text/css;text/javascript;application/xml;text/x-log;
+StartupWMClass=edit
