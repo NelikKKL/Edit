@@ -27,10 +27,10 @@ impl SettingsPage {
     ];
     fn label(&self) -> &'static str {
         match self {
-            SettingsPage::Appearance => "🎨  Внешний вид",
-            SettingsPage::Font => "🔤  Шрифт",
-            SettingsPage::Editor => "📝  Редактор",
-            SettingsPage::Advanced => "⚙  Дополнительно",
+            SettingsPage::Appearance => "Внешний вид",
+            SettingsPage::Font => "Шрифт",
+            SettingsPage::Editor => "Редактор",
+            SettingsPage::Advanced => "Дополнительно",
         }
     }
 }
@@ -307,20 +307,20 @@ impl EditApp {
                     ui.add_space(12.0);
                     ui.label(RichText::new("edit").color(self.theme.titlebar_fg).strong());
                     if let Some(tab) = self.tabs.get(self.active) {
-                        let dirty = if tab.dirty { " ●" } else { "" };
+                        let dirty = if tab.dirty { " *" } else { "" };
                         ui.label(RichText::new(format!("— {}{}", tab.title, dirty)).color(self.theme.fg_dim));
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if window_button(ui, "✕", self.theme.close_hover, self.theme.titlebar_fg).clicked() {
+                        if window_button(ui, "X", self.theme.close_hover, self.theme.titlebar_fg).clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                        let sym = if maximized { "🗗" } else { "🗖" };
+                        let sym = if maximized { "[ ]" } else { "[]" };
                         if window_button(ui, sym, self.theme.button_hover, self.theme.titlebar_fg).clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                         }
-                        if window_button(ui, "🗕", self.theme.button_hover, self.theme.titlebar_fg).clicked() {
+                        if window_button(ui, "_", self.theme.button_hover, self.theme.titlebar_fg).clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                     });
@@ -335,40 +335,40 @@ impl EditApp {
                 Frame::none()
                     .fill(self.theme.panel_bg)
                     .inner_margin(Margin::symmetric(10.0, 5.0))
-                    .stroke(Stroke::new(1.0, self.theme.border)),
+                    .stroke(Stroke::new(1.0_f32, self.theme.border)),
             )
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    if ui.button("📂 Открыть").clicked() {
+                    if ui.button("Открыть").clicked() {
                         self.open_file_dialog();
                     }
-                    if ui.button("🗂 Папка").clicked() {
+                    if ui.button("Папка").clicked() {
                         self.open_folder_dialog();
                     }
-                    if ui.button("💾 Сохранить").clicked() {
+                    if ui.button("Сохранить").clicked() {
                         self.save_tab(self.active);
                     }
                     if ui.button("Сохранить как").clicked() {
                         self.save_tab_as(self.active);
                     }
                     ui.separator();
-                    if ui.button("🔍 Поиск").clicked() {
+                    if ui.button("Поиск").clicked() {
                         self.search.open();
                     }
                     if ui
-                        .selectable_label(self.settings.show_sidebar, "🗀 Дерево")
+                        .selectable_label(self.settings.show_sidebar, "Дерево")
                         .clicked()
                     {
                         self.settings.show_sidebar = !self.settings.show_sidebar;
                         self.settings.save();
                     }
                     ui.separator();
-                    if ui.button("➕").on_hover_text("Новая вкладка (Ctrl+N)").clicked() {
+                    if ui.button("+").on_hover_text("Новая вкладка (Ctrl+N)").clicked() {
                         self.new_tab();
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("⚙ Настройки").clicked() {
+                        if ui.button("Настройки").clicked() {
                             self.show_settings = true;
                         }
                     });
@@ -393,13 +393,13 @@ impl EditApp {
                                 .inner_margin(Margin::symmetric(8.0, 4.0))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
-                                        let dirty = if tab.dirty { " ●" } else { "" };
+                                        let dirty = if tab.dirty { " *" } else { "" };
                                         let text = RichText::new(format!("{}{}", tab.title, dirty))
                                             .color(if selected { self.theme.fg } else { self.theme.fg_dim });
                                         if ui.selectable_label(false, text).clicked() {
                                             to_activate = Some(i);
                                         }
-                                        if ui.small_button("✕").clicked() {
+                                        if ui.small_button("X").clicked() {
                                             to_close = Some(i);
                                         }
                                     });
@@ -595,7 +595,7 @@ impl EditApp {
             .map(|t| self.search.find_all(&t.content))
             .unwrap_or_default();
 
-        egui::Window::new("🔍 Поиск")
+        egui::Window::new("Поиск")
             .open(&mut still_open)
             .collapsible(false)
             .resizable(false)
@@ -603,7 +603,7 @@ impl EditApp {
             .frame(
                 Frame::window(&ctx.style())
                     .fill(theme.panel_bg)
-                    .stroke(Stroke::new(1.0, theme.border)),
+                    .stroke(Stroke::new(1.0_f32, theme.border)),
             )
             .show(ctx, |ui| {
                 ui.set_min_width(280.0);
@@ -627,12 +627,12 @@ impl EditApp {
                         if ui.button("Закрыть").clicked() {
                             self.search.close();
                         }
-                        if ui.button("▶").clicked() && !matches.is_empty() {
+                        if ui.button(">").clicked() && !matches.is_empty() {
                             self.search.current_match = (self.search.current_match + 1) % matches.len();
                             let (s, _) = matches[self.search.current_match];
                             self.pending_scroll_line = Some(line_of(&self.tabs[self.active].content, s));
                         }
-                        if ui.button("◀").clicked() && !matches.is_empty() {
+                        if ui.button("<").clicked() && !matches.is_empty() {
                             self.search.current_match = (self.search.current_match + matches.len() - 1) % matches.len();
                             let (s, _) = matches[self.search.current_match];
                             self.pending_scroll_line = Some(line_of(&self.tabs[self.active].content, s));
@@ -661,7 +661,7 @@ impl EditApp {
             .frame(
                 Frame::window(&ctx.style())
                     .fill(theme.panel_bg)
-                    .stroke(Stroke::new(1.0, theme.border)),
+                    .stroke(Stroke::new(1.0_f32, theme.border)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -779,7 +779,7 @@ impl EditApp {
             .collapsible(false)
             .resizable(false)
             .anchor(Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .frame(Frame::window(&ctx.style()).fill(theme.panel_bg).stroke(Stroke::new(1.0, theme.border)))
+            .frame(Frame::window(&ctx.style()).fill(theme.panel_bg).stroke(Stroke::new(1.0_f32, theme.border)))
             .show(ctx, |ui| {
                 ui.label(format!("Сохранить изменения в «{title}»?"));
                 ui.add_space(6.0);

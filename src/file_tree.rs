@@ -54,7 +54,7 @@ impl FileTree {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| dir.to_string_lossy().to_string());
 
-        let header = egui::CollapsingHeader::new(format!("📁 {name}"))
+        let header = egui::CollapsingHeader::new(name)
             .default_open(root)
             .id_source(dir.to_string_lossy().to_string());
 
@@ -73,8 +73,7 @@ impl FileTree {
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
-                    let label = format!("📄 {fname}");
-                    let resp = ui.selectable_label(false, label);
+                    let resp = ui.selectable_label(false, fname);
                     if resp.clicked() {
                         result = Some(TreeAction::OpenFile(path.clone()));
                     }

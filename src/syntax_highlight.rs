@@ -191,13 +191,3 @@ fn split_keep_newline(text: &str) -> Vec<&str> {
     }
     out
 }
-
-/// Map a file extension (lowercase, no dot) to whether we consider it
-/// "code" worth highlighting vs plain text. Used only for UI hints.
-pub fn extension_of(path: &str) -> String {
-    std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("txt")
-        .to_lowercase()
-}
