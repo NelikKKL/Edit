@@ -41,8 +41,16 @@ extended-description = "edit — a fast, modern, notepad-style text editor with 
 depends = "$auto"
 section = "editors"
 priority = "optional"
+maintainer-scripts = "debian"
 assets = [
     ["target/release/edit", "usr/bin/", "755"],
     ["linux/edit.desktop", "usr/share/applications/", "644"],
-    ["assets/icon.png", "usr/share/icons/hicolor/256x256/apps/edit.png", "644"],
+    ["assets/hicolor/16x16/apps/edit.png", "usr/share/icons/hicolor/16x16/apps/edit.png", "644"],
+    ["assets/hicolor/24x24/apps/edit.png", "usr/share/icons/hicolor/24x24/apps/edit.png", "644"],
+    ["assets/hicolor/32x32/apps/edit.png", "usr/share/icons/hicolor/32x32/apps/edit.png", "644"],
+    ["assets/hicolor/48x48/apps/edit.png", "usr/share/icons/hicolor/48x48/apps/edit.png", "644"],
+    ["assets/hicolor/64x64/apps/edit.png", "usr/share/icons/hicolor/64x64/apps/edit.png", "644"],
+    ["assets/hicolor/128x128/apps/edit.png", "usr/share/icons/hicolor/128x128/apps/edit.png", "644"],
+    ["assets/hicolor/256x256/apps/edit.png", "usr/share/icons/hicolor/256x256/apps/edit.png", "644"],
+    ["assets/hicolor/512x512/apps/edit.png", "usr/share/icons/hicolor/512x512/apps/edit.png", "644"],
 ]

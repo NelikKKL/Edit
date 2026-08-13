@@ -22,6 +22,7 @@ fn main() -> eframe::Result<()> {
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1200.0, 800.0])
         .with_min_inner_size([640.0, 420.0])
+        .with_resizable(true)
         .with_decorations(false) // we draw our own themeable title bar
         .with_icon(icon)
         .with_title("edit");

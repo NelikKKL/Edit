@@ -10,6 +10,12 @@ use crate::theme::{Theme, ThemeKind};
 use egui::{Align, Align2, Color32, Frame, Margin, RichText, Sense, Stroke};
 use std::path::{Path, PathBuf};
 
+/// Width, in points, of the invisible strip along each edge of the
+/// (undecorated) main window that lets the user grab it to resize — since
+/// disabling native decorations for our custom title bar also removes the
+/// OS's own edge-drag-to-resize behavior, we reimplement it ourselves.
+const RESIZE_BORDER: f32 = 6.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsPage {
     Appearance,
@@ -285,6 +291,55 @@ impl EditApp {
         });
     }
 
+    /// Lets the user resize the (undecorated) main window by dragging its
+    /// edges/corners, the way a normal OS window border would work — with
+    /// the cursor changing shape near the edge, and a drag actually
+    /// resizing the window.
+    fn handle_window_resize(&mut self, ctx: &egui::Context) {
+        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        if maximized || self.fullscreen {
+            return;
+        }
+
+        let screen = ctx.screen_rect();
+        let (hover_pos, primary_pressed) =
+            ctx.input(|i| (i.pointer.hover_pos(), i.pointer.primary_pressed()));
+
+        let Some(pos) = hover_pos else { return };
+
+        let west = pos.x <= screen.left() + RESIZE_BORDER;
+        let east = pos.x >= screen.right() - RESIZE_BORDER;
+        let north = pos.y <= screen.top() + RESIZE_BORDER;
+        let south = pos.y >= screen.bottom() - RESIZE_BORDER;
+
+        let hit = if west && north {
+            Some((egui::CursorIcon::ResizeNwSe, egui::ResizeDirection::NorthWest))
+        } else if east && south {
+            Some((egui::CursorIcon::ResizeNwSe, egui::ResizeDirection::SouthEast))
+        } else if east && north {
+            Some((egui::CursorIcon::ResizeNeSw, egui::ResizeDirection::NorthEast))
+        } else if west && south {
+            Some((egui::CursorIcon::ResizeNeSw, egui::ResizeDirection::SouthWest))
+        } else if west {
+            Some((egui::CursorIcon::ResizeHorizontal, egui::ResizeDirection::West))
+        } else if east {
+            Some((egui::CursorIcon::ResizeHorizontal, egui::ResizeDirection::East))
+        } else if north {
+            Some((egui::CursorIcon::ResizeVertical, egui::ResizeDirection::North))
+        } else if south {
+            Some((egui::CursorIcon::ResizeVertical, egui::ResizeDirection::South))
+        } else {
+            None
+        };
+
+        if let Some((cursor, direction)) = hit {
+            ctx.set_cursor_icon(cursor);
+            if primary_pressed {
+                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+            }
+        }
+    }
+
     // -------------------------------------------------------------- panels
 
     fn title_bar(&mut self, ctx: &egui::Context) {
@@ -293,8 +348,12 @@ impl EditApp {
             .exact_height(height)
             .frame(Frame::none().fill(self.theme.titlebar_bg))
             .show(ctx, |ui| {
-                let rect = ui.max_rect();
-                let response = ui.interact(rect, egui::Id::new("title_bar_drag"), Sense::click_and_drag());
+                let full_rect = ui.max_rect();
+                let drag_rect = egui::Rect::from_min_max(
+                    full_rect.min + egui::vec2(RESIZE_BORDER, RESIZE_BORDER),
+                    full_rect.max - egui::vec2(RESIZE_BORDER, 0.0),
+                );
+                let response = ui.interact(drag_rect, egui::Id::new("title_bar_drag"), Sense::click_and_drag());
                 if response.drag_started_by(egui::PointerButton::Primary) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
@@ -424,6 +483,7 @@ impl EditApp {
         egui::SidePanel::left("sidebar")
             .resizable(true)
             .default_width(230.0)
+            .width_range(150.0..=500.0)
             .frame(
                 Frame::none()
                     .fill(theme.sidebar_bg)
@@ -598,7 +658,8 @@ impl EditApp {
         egui::Window::new("Поиск")
             .open(&mut still_open)
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
+            .default_size([300.0, 110.0])
             .anchor(Align2::RIGHT_TOP, egui::vec2(-16.0, 78.0))
             .frame(
                 Frame::window(&ctx.style())
@@ -822,6 +883,7 @@ impl EditApp {
 impl eframe::App for EditApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_shortcuts(ctx);
+        self.handle_window_resize(ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
         self.handle_dropped_files(ctx);
 
