@@ -1,11 +1,45 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
-/// Family name -> path to a .ttf/.otf file for it. Built once at startup by
-/// scanning the OS font directories, similar to what Notepad's font picker
-/// draws from.
+/// Family name -> path to a .ttf/.otf file for it. Built by scanning the OS
+/// font directories and reading every font file's `name` table, similar to
+/// what Notepad's font picker draws from.
+///
+/// On a typical Linux install this walks `/usr/share/fonts` and friends,
+/// which can easily be a few thousand files — parsing all of them
+/// synchronously used to run before the very first frame was shown, adding
+/// a very noticeable delay to app startup. Use [`SystemFonts::scan_async`]
+/// instead of calling [`SystemFonts::scan`] directly on the UI thread.
 pub struct SystemFonts {
     pub families: BTreeMap<String, PathBuf>,
+}
+
+/// Shared handle to a font scan that may still be running on a background
+/// thread. Cheap to check (`try_lock`) from the UI thread every frame.
+pub enum FontsState {
+    Loading,
+    Ready(SystemFonts),
+}
+
+impl FontsState {
+    pub fn is_ready(&self) -> bool {
+        matches!(self, FontsState::Ready(_))
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        match self {
+            FontsState::Loading => Vec::new(),
+            FontsState::Ready(f) => f.names(),
+        }
+    }
+
+    pub fn load_bytes(&self, family: &str) -> Option<Vec<u8>> {
+        match self {
+            FontsState::Loading => None,
+            FontsState::Ready(f) => f.load_bytes(family),
+        }
+    }
 }
 
 impl SystemFonts {
@@ -15,6 +49,24 @@ impl SystemFonts {
             scan_dir(&dir, &mut families);
         }
         Self { families }
+    }
+
+    /// Kicks off the (potentially slow) filesystem scan on a background
+    /// thread and returns immediately with a handle that starts out as
+    /// `FontsState::Loading`. The app can keep drawing its first frames
+    /// (using the built-in monospace font) while the scan finishes in the
+    /// background; once it's done the handle flips to `FontsState::Ready`
+    /// and the app can install the user's chosen font, if any.
+    pub fn scan_async() -> Arc<Mutex<FontsState>> {
+        let state = Arc::new(Mutex::new(FontsState::Loading));
+        let state_bg = state.clone();
+        std::thread::spawn(move || {
+            let fonts = SystemFonts::scan();
+            if let Ok(mut guard) = state_bg.lock() {
+                *guard = FontsState::Ready(fonts);
+            }
+        });
+        state
     }
 
     pub fn names(&self) -> Vec<String> {

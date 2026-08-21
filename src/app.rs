@@ -1,14 +1,29 @@
 use crate::autoclose;
 use crate::custom_css;
-use crate::editor_tab::EditorTab;
+use crate::editor_tab::{EditorTab, HighlightCache};
 use crate::file_tree::{FileTree, TreeAction};
-use crate::fonts::SystemFonts;
+use crate::fonts::{FontsState, SystemFonts};
 use crate::search::SearchState;
 use crate::settings::Settings;
 use crate::syntax_highlight::Highlighter;
 use crate::theme::{Theme, ThemeKind};
 use egui::{Align, Align2, Color32, Frame, Margin, RichText, Sense, Stroke};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Mutex};
+
+/// Files at/above this size are read on a background thread instead of
+/// blocking the UI thread inside `open_path`, so opening a big file never
+/// freezes the window (a placeholder tab is shown immediately instead).
+const ASYNC_LOAD_BYTES: u64 = 2 * 1024 * 1024; // 2 MB
+
+/// One in-flight background file read, tracked so `EditApp` can poll it
+/// each frame without blocking.
+struct PendingLoad {
+    tab_id: egui::Id,
+    path: PathBuf,
+    rx: mpsc::Receiver<std::io::Result<String>>,
+}
 
 /// Width, in points, of the invisible strip along each edge of the
 /// (undecorated) main window that lets the user grab it to resize — since
@@ -51,7 +66,24 @@ pub struct EditApp {
     file_tree: FileTree,
     search: SearchState,
     highlighter: Highlighter,
-    system_fonts: SystemFonts,
+    system_fonts: Arc<Mutex<FontsState>>,
+    /// Set at startup when `settings.font_family` names a custom font that
+    /// hasn't been installed yet because the background font scan (see
+    /// `SystemFonts::scan_async`) is still running; checked once per frame
+    /// (cheap `try_lock`) until it can be applied.
+    font_install_pending: bool,
+    pending_loads: Vec<PendingLoad>,
+    /// Cache for the search-match byte ranges, so both the editor's
+    /// highlight overlay and the search popup can share one computation per
+    /// frame instead of each re-scanning (and, for case-insensitive
+    /// search, re-allocating a whole lowercased copy of) the buffer.
+    search_cache_key: Option<(usize, u64, String, bool)>,
+    search_cache_ranges: Vec<(usize, usize)>,
+    /// `line_col_of` walks the buffer from byte 0 up to the cursor, so for
+    /// a big file it's not something we want to redo on every idle frame
+    /// just to keep repainting the status bar; only recompute when the
+    /// cursor actually moved.
+    cursor_cache: Option<(egui::Id, usize, (usize, usize))>,
 
     show_settings: bool,
     settings_page: SettingsPage,
@@ -68,7 +100,14 @@ pub struct EditApp {
 impl EditApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial_file: Option<String>) -> Self {
         let settings = Settings::load();
-        let system_fonts = SystemFonts::scan();
+        // Scanning every system font file (to build the family picker in
+        // Settings > Font) can take a while on machines with large font
+        // collections. Do it on a background thread so it never delays the
+        // very first frame; `font_install_pending` below makes sure a
+        // custom font from settings still gets applied automatically as
+        // soon as the scan finishes.
+        let system_fonts = SystemFonts::scan_async();
+        let font_install_pending = settings.font_family.is_some();
 
         let mut app = Self {
             theme: Theme::dark(),
@@ -79,6 +118,11 @@ impl EditApp {
             search: SearchState::default(),
             highlighter: Highlighter::new(),
             system_fonts,
+            font_install_pending,
+            pending_loads: Vec::new(),
+            search_cache_key: None,
+            search_cache_ranges: Vec::new(),
+            cursor_cache: None,
             show_settings: false,
             settings_page: SettingsPage::Appearance,
             css_status: None,
@@ -117,19 +161,94 @@ impl EditApp {
             self.active = idx;
             return;
         }
-        match std::fs::read_to_string(&path) {
-            Ok(content) => {
-                // Replace a single, untouched "Untitled" tab if that's all we have.
-                if self.tabs.len() == 1 && self.tabs[0].path.is_none() && !self.tabs[0].dirty && self.tabs[0].content.is_empty() {
-                    self.tabs[0] = EditorTab::from_path(path, content);
-                    self.active = 0;
-                } else {
-                    self.tabs.push(EditorTab::from_path(path, content));
-                    self.active = self.tabs.len() - 1;
+
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if size < ASYNC_LOAD_BYTES {
+            // Small/typical file: just read it inline, it'll be
+            // effectively instant and this keeps the common case simple.
+            match std::fs::read_to_string(&path) {
+                Ok(content) => self.insert_loaded_tab(path, content),
+                Err(e) => {
+                    self.status_message = Some(format!("Не удалось открыть файл: {e}"));
                 }
             }
-            Err(e) => {
-                self.status_message = Some(format!("Не удалось открыть файл: {e}"));
+            return;
+        }
+
+        // Big file: reading it synchronously here would freeze the whole
+        // window until the read (and UTF-8 validation) finishes. Show a
+        // placeholder tab immediately and do the read on a background
+        // thread instead.
+        let tab = EditorTab::loading(path.clone());
+        let tab_id = tab.id;
+        if self.tabs.len() == 1 && self.tabs[0].path.is_none() && !self.tabs[0].dirty && self.tabs[0].content.is_empty() {
+            self.tabs[0] = tab;
+            self.active = 0;
+        } else {
+            self.tabs.push(tab);
+            self.active = self.tabs.len() - 1;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let read_path = path.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(std::fs::read_to_string(&read_path));
+        });
+        self.pending_loads.push(PendingLoad { tab_id, path, rx });
+    }
+
+    /// Places freshly-read file content into a tab, reusing the current
+    /// single empty "Untitled" tab if that's all there is.
+    fn insert_loaded_tab(&mut self, path: PathBuf, content: String) {
+        if self.tabs.len() == 1 && self.tabs[0].path.is_none() && !self.tabs[0].dirty && self.tabs[0].content.is_empty() {
+            self.tabs[0] = EditorTab::from_path(path, content);
+            self.active = 0;
+        } else {
+            self.tabs.push(EditorTab::from_path(path, content));
+            self.active = self.tabs.len() - 1;
+        }
+    }
+
+    /// Checks in on any background file reads kicked off by `open_path`
+    /// and, once one finishes, swaps its placeholder tab's content in
+    /// place (matched by id, since the tab's index may have moved).
+    fn poll_pending_loads(&mut self) {
+        if self.pending_loads.is_empty() {
+            return;
+        }
+        let mut done = Vec::new();
+        for (i, pending) in self.pending_loads.iter().enumerate() {
+            match pending.rx.try_recv() {
+                Ok(result) => done.push((i, result)),
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    done.push((
+                        i,
+                        Err(std::io::Error::new(std::io::ErrorKind::Other, "не удалось прочитать файл")),
+                    ));
+                }
+            }
+        }
+        // Remove from the back so earlier indices stay valid.
+        for (i, result) in done.into_iter().rev() {
+            let pending = self.pending_loads.remove(i);
+            match result {
+                Ok(content) => {
+                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == pending.tab_id) {
+                        *tab = EditorTab::from_path(pending.path, content);
+                    }
+                }
+                Err(e) => {
+                    self.status_message = Some(format!("Не удалось открыть файл: {e}"));
+                    if let Some(pos) = self.tabs.iter().position(|t| t.id == pending.tab_id) {
+                        self.tabs.remove(pos);
+                        if self.tabs.is_empty() {
+                            self.new_tab();
+                        } else if self.active >= self.tabs.len() {
+                            self.active = self.tabs.len() - 1;
+                        }
+                    }
+                }
             }
         }
     }
@@ -232,24 +351,40 @@ impl EditApp {
     }
 
     fn install_font(&mut self, ctx: &egui::Context) {
-        let mut defs = egui::FontDefinitions::default();
-        if let Some(family) = self.settings.font_family.clone() {
-            if let Some(bytes) = self.system_fonts.load_bytes(&family) {
-                defs.font_data
-                    .insert("user_font".to_owned(), egui::FontData::from_owned(bytes));
-                defs.families
-                    .entry(egui::FontFamily::Monospace)
-                    .or_default()
-                    .insert(0, "user_font".to_owned());
-                defs.families
-                    .entry(egui::FontFamily::Proportional)
-                    .or_default()
-                    .insert(0, "user_font".to_owned());
-            } else {
-                self.status_message = Some(format!("Шрифт «{family}» не найден"));
-            }
+        let Some(family) = self.settings.font_family.clone() else {
+            ctx.set_fonts(egui::FontDefinitions::default());
+            self.font_install_pending = false;
+            return;
+        };
+
+        // The system font list is still being scanned in the background;
+        // keep the built-in font for now and try again next frame (see
+        // `font_install_pending` polling in `update`) instead of blocking
+        // here until the scan finishes.
+        let Ok(state) = self.system_fonts.lock() else { return };
+        if !state.is_ready() {
+            self.font_install_pending = true;
+            return;
         }
+
+        let mut defs = egui::FontDefinitions::default();
+        if let Some(bytes) = state.load_bytes(&family) {
+            defs.font_data
+                .insert("user_font".to_owned(), egui::FontData::from_owned(bytes));
+            defs.families
+                .entry(egui::FontFamily::Monospace)
+                .or_default()
+                .insert(0, "user_font".to_owned());
+            defs.families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .insert(0, "user_font".to_owned());
+        } else {
+            self.status_message = Some(format!("Шрифт «{family}» не найден"));
+        }
+        drop(state);
         ctx.set_fonts(defs);
+        self.font_install_pending = false;
     }
 
     // ----------------------------------------------------------- shortcuts
@@ -511,10 +646,24 @@ impl EditApp {
                 let idx = self.active.min(self.tabs.len() - 1);
                 self.active = idx;
 
+                if self.tabs[idx].loading {
+                    ui.centered_and_justified(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.weak("Загрузка файла…");
+                        });
+                    });
+                    return;
+                }
+
                 // ---- gather everything the layouter closure needs, as owned
                 // values, BEFORE taking a mutable borrow of the tab's content.
                 let font_size = self.settings.font_size;
-                let syntax_enabled = self.settings.syntax_highlighting;
+                // Syntax highlighting is auto-disabled for very large files:
+                // syntect re-tokenizes the whole buffer from scratch on
+                // every edit (it isn't incremental), which turns into
+                // per-keystroke lag once a file gets big enough.
+                let syntax_enabled = self.settings.syntax_highlighting && !self.tabs[idx].large;
                 let word_wrap = self.settings.word_wrap;
                 let dark = theme.is_dark();
                 let default_color = theme.fg;
@@ -522,21 +671,23 @@ impl EditApp {
                 let current_match_bg = theme.accent.gamma_multiply(0.65);
                 let extension = self.tabs[idx].extension();
                 let tab_id = self.tabs[idx].id;
+                let tab_large = self.tabs[idx].large;
 
-                let search_active = self.search.open && !self.search.query.is_empty();
-                let search_ranges = if search_active {
-                    self.search.find_all(&self.tabs[idx].content)
-                } else {
-                    Vec::new()
-                };
+                let search_ranges = self.search_matches();
                 let current_match = if search_ranges.is_empty() {
                     None
                 } else {
                     Some(self.search.current_match.min(search_ranges.len() - 1))
                 };
 
-                let before_text = self.tabs[idx].content.clone();
-                let line_count = before_text.lines().count().max(1);
+                // The bracket/quote auto-close feature needs a full
+                // before/after diff of the buffer, which means a full
+                // clone up front; skip that (and the feature) for very
+                // large files where it'd mean copying megabytes of text on
+                // every single frame just in case a keystroke happened.
+                let before_text = if tab_large { None } else { Some(self.tabs[idx].content.clone()) };
+
+                let line_count = self.tabs[idx].line_count();
                 let font_id = egui::FontId::monospace(font_size);
                 let line_h = ui.text_style_height(&egui::TextStyle::Monospace).max(font_size * 1.3);
 
@@ -553,20 +704,71 @@ impl EditApp {
                             let ext_c = extension.clone();
                             let ranges_c = search_ranges.clone();
 
+                            // Reused across frames where nothing that
+                            // affects the highlighted layout has changed —
+                            // see `HighlightCache` docs. It's parked in a
+                            // `RefCell` (rather than mutated directly on
+                            // `self.tabs[idx]`) purely because the closure
+                            // below runs *while* `self.tabs[idx].content`
+                            // is already mutably borrowed by `TextEdit`;
+                            // the cache is moved back onto the tab right
+                            // after `.show()` returns.
+                            let cache_cell = RefCell::new(self.tabs[idx].highlight_cache.take());
+                            let cache_ref = &cache_cell;
+
                             let mut layouter = move |ui: &egui::Ui, text: &str, wrap_width: f32| {
-                                let mut job = highlighter.build_job(
-                                    text,
-                                    &ext_c,
-                                    font_id_c.clone(),
-                                    dark,
-                                    default_color,
-                                    syntax_enabled,
-                                    &ranges_c,
-                                    current_match,
-                                    match_bg,
-                                    current_match_bg,
-                                );
-                                job.wrap.max_width = if word_wrap { wrap_width } else { f32::INFINITY };
+                                let effective_wrap = if word_wrap { wrap_width } else { f32::INFINITY };
+                                let mut cache = cache_ref.borrow_mut();
+
+                                let hit = cache.as_ref().is_some_and(|c| {
+                                    c.matches(
+                                        text,
+                                        &ext_c,
+                                        dark,
+                                        default_color,
+                                        syntax_enabled,
+                                        font_id_c.size,
+                                        effective_wrap,
+                                        &ranges_c,
+                                        current_match,
+                                        match_bg,
+                                        current_match_bg,
+                                    )
+                                });
+
+                                let job = if hit {
+                                    cache.as_ref().unwrap().job.clone()
+                                } else {
+                                    let mut job = highlighter.build_job(
+                                        text,
+                                        &ext_c,
+                                        font_id_c.clone(),
+                                        dark,
+                                        default_color,
+                                        syntax_enabled,
+                                        &ranges_c,
+                                        current_match,
+                                        match_bg,
+                                        current_match_bg,
+                                    );
+                                    job.wrap.max_width = effective_wrap;
+                                    *cache = Some(HighlightCache::new(
+                                        text,
+                                        ext_c.clone(),
+                                        dark,
+                                        default_color,
+                                        syntax_enabled,
+                                        font_id_c.size,
+                                        effective_wrap,
+                                        ranges_c.clone(),
+                                        current_match,
+                                        match_bg,
+                                        current_match_bg,
+                                        job.clone(),
+                                    ));
+                                    job
+                                };
+                                drop(cache);
                                 ui.fonts(|f| f.layout_job(job))
                             };
 
@@ -579,22 +781,47 @@ impl EditApp {
                                 .layouter(&mut layouter)
                                 .show(ui);
 
+                            drop(layouter);
+                            self.tabs[idx].highlight_cache = cache_cell.into_inner();
+
                             if output.response.changed() {
-                                let after_text = self.tabs[idx].content.clone();
-                                if after_text != before_text {
-                                    self.tabs[idx].dirty = true;
-                                    if self.settings.auto_close_brackets {
-                                        if let Some(fixed) = autoclose::process_edit(&before_text, &after_text) {
-                                            self.tabs[idx].content = fixed;
+                                self.tabs[idx].touch();
+                                match &before_text {
+                                    Some(before) => {
+                                        let after_text = self.tabs[idx].content.clone();
+                                        if after_text != *before {
+                                            self.tabs[idx].dirty = true;
+                                            if self.settings.auto_close_brackets {
+                                                if let Some(fixed) = autoclose::process_edit(before, &after_text) {
+                                                    self.tabs[idx].content = fixed;
+                                                    self.tabs[idx].touch();
+                                                }
+                                            }
                                         }
+                                    }
+                                    None => {
+                                        self.tabs[idx].dirty = true;
                                     }
                                 }
                             }
 
                             // Track roughly where the cursor is for the status bar.
+                            // `line_col_of` scans from the start of the buffer,
+                            // so only rerun it when the cursor position (not
+                            // just the frame) actually changed.
                             if let Some(cursor_range) = output.cursor_range {
                                 let ccursor = cursor_range.primary.ccursor.index;
-                                let (line, col) = line_col_of(&self.tabs[idx].content, ccursor);
+                                let cache_hit = self
+                                    .cursor_cache
+                                    .as_ref()
+                                    .is_some_and(|(id, c, _)| *id == tab_id && *c == ccursor);
+                                let (line, col) = if cache_hit {
+                                    self.cursor_cache.unwrap().2
+                                } else {
+                                    let lc = line_col_of(&self.tabs[idx].content, ccursor);
+                                    self.cursor_cache = Some((tab_id, ccursor, lc));
+                                    lc
+                                };
                                 self.status_line_col = (line, col);
                             }
                         });
@@ -608,6 +835,27 @@ impl EditApp {
                         }
                     });
             });
+    }
+
+    /// Byte ranges of every match of the current search query in the active
+    /// tab, recomputed only when the tab, its content, the query, or the
+    /// case-sensitivity toggle actually changed since the last call —
+    /// shared between the editor's highlight overlay and the search popup
+    /// so the buffer isn't rescanned (and, for case-insensitive search,
+    /// copied) twice per frame.
+    fn search_matches(&mut self) -> Vec<(usize, usize)> {
+        if !self.search.open || self.search.query.is_empty() {
+            return Vec::new();
+        }
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return Vec::new();
+        };
+        let key = (self.active, tab.version, self.search.query.clone(), self.search.match_case);
+        if self.search_cache_key.as_ref() != Some(&key) {
+            self.search_cache_ranges = self.search.find_all(&tab.content);
+            self.search_cache_key = Some(key);
+        }
+        self.search_cache_ranges.clone()
     }
 
     fn status_bar(&mut self, ctx: &egui::Context) {
@@ -649,11 +897,7 @@ impl EditApp {
         let theme = self.theme.clone();
         let mut still_open = true;
 
-        let matches = self
-            .tabs
-            .get(self.active)
-            .map(|t| self.search.find_all(&t.content))
-            .unwrap_or_default();
+        let matches = self.search_matches();
 
         egui::Window::new("Поиск")
             .open(&mut still_open)
@@ -752,6 +996,11 @@ impl EditApp {
                             ui.heading("Шрифт");
                             ui.add_space(6.0);
                             let current = self.settings.font_family.clone().unwrap_or_else(|| "Встроенный (моно)".to_string());
+                            let (fonts_ready, font_names) = self
+                                .system_fonts
+                                .lock()
+                                .map(|s| (s.is_ready(), s.names()))
+                                .unwrap_or((false, Vec::new()));
                             egui::ComboBox::from_label("Семейство шрифта")
                                 .selected_text(current)
                                 .show_ui(ui, |ui| {
@@ -759,7 +1008,7 @@ impl EditApp {
                                         self.settings.font_family = None;
                                         theme_changed = true;
                                     }
-                                    for name in self.system_fonts.names() {
+                                    for name in font_names {
                                         let selected = self.settings.font_family.as_deref() == Some(name.as_str());
                                         if ui.selectable_label(selected, &name).clicked() {
                                             self.settings.font_family = Some(name);
@@ -767,6 +1016,10 @@ impl EditApp {
                                         }
                                     }
                                 });
+                            if !fonts_ready {
+                                ui.add_space(4.0);
+                                ui.weak("Сканирование системных шрифтов…");
+                            }
                             ui.add_space(8.0);
                             if ui.add(egui::Slider::new(&mut self.settings.font_size, 8.0..=36.0).text("Размер шрифта")).changed() {
                                 self.settings.save();
@@ -882,6 +1135,18 @@ impl EditApp {
 
 impl eframe::App for EditApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_pending_loads();
+        if self.font_install_pending {
+            self.install_font(ctx);
+        }
+        // egui only calls `update` again on input/animation by default; while
+        // a background file read or font scan is still in flight, ask for a
+        // steady trickle of repaints so we notice it finishing even if the
+        // user isn't touching the mouse/keyboard.
+        if !self.pending_loads.is_empty() || self.font_install_pending {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+
         self.handle_shortcuts(ctx);
         self.handle_window_resize(ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
