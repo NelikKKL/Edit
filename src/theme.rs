@@ -18,12 +18,12 @@ impl ThemeKind {
         ThemeKind::Custom,
     ];
 
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self, lang: crate::i18n::Lang) -> &'static str {
         match self {
-            ThemeKind::Light => "Светлая",
-            ThemeKind::Dark => "Тёмная",
+            ThemeKind::Light => crate::i18n::t(lang, "theme.light"),
+            ThemeKind::Dark => crate::i18n::t(lang, "theme.dark"),
             ThemeKind::Char => "Char",
-            ThemeKind::Custom => "Своя (CSS)",
+            ThemeKind::Custom => crate::i18n::t(lang, "theme.custom_css"),
         }
     }
 }

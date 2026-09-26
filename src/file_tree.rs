@@ -1,3 +1,4 @@
+use crate::i18n::{t, Lang};
 use crate::theme::Theme;
 use std::path::{Path, PathBuf};
 
@@ -20,9 +21,9 @@ impl FileTree {
         self.root = Some(path);
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) -> TreeAction {
+    pub fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme, lang: Lang) -> TreeAction {
         let Some(root) = self.root.clone() else {
-            ui.weak("Папка не выбрана");
+            ui.weak(t(lang, "file_tree.no_folder"));
             return TreeAction::None;
         };
 

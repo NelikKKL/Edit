@@ -1,3 +1,4 @@
+use crate::i18n::Lang;
 use crate::theme::ThemeKind;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -19,6 +20,12 @@ pub struct Settings {
 
     #[serde(default)]
     pub last_folder: Option<String>,
+
+    /// Explicit user choice of interface language, or `None` to follow the
+    /// OS locale (see `Lang::detect_system`). `#[serde(default)]` so old
+    /// `settings.json` files (from before this field existed) still load.
+    #[serde(default)]
+    pub lang: Option<Lang>,
 }
 
 impl Default for Settings {
@@ -35,6 +42,7 @@ impl Default for Settings {
             tab_width: 4,
             show_sidebar: false,
             last_folder: None,
+            lang: None,
         }
     }
 }

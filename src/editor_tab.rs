@@ -24,6 +24,13 @@ pub struct HighlightCache {
     dark: bool,
     default_color: Color32,
     syntax_enabled: bool,
+    /// Whether `Highlighter`'s background syntax/theme load had finished
+    /// when this job was built (see `Highlighter::is_ready`). Part of the
+    /// cache key purely so that the moment the load completes, the cache
+    /// is invalidated exactly once and the buffer gets re-laid-out with
+    /// real colors instead of staying on the plain-text fallback used
+    /// while loading.
+    syntax_ready: bool,
     font_size_bits: u32,
     wrap_bits: u32,
     search_ranges: Vec<(usize, usize)>,
@@ -41,6 +48,7 @@ impl HighlightCache {
         dark: bool,
         default_color: Color32,
         syntax_enabled: bool,
+        syntax_ready: bool,
         font_size: f32,
         wrap: f32,
         search_ranges: Vec<(usize, usize)>,
@@ -56,6 +64,7 @@ impl HighlightCache {
             dark,
             default_color,
             syntax_enabled,
+            syntax_ready,
             font_size_bits: font_size.to_bits(),
             wrap_bits: wrap.to_bits(),
             search_ranges,
@@ -77,6 +86,7 @@ impl HighlightCache {
         dark: bool,
         default_color: Color32,
         syntax_enabled: bool,
+        syntax_ready: bool,
         font_size: f32,
         wrap: f32,
         search_ranges: &[(usize, usize)],
@@ -89,6 +99,7 @@ impl HighlightCache {
             && self.dark == dark
             && self.default_color == default_color
             && self.syntax_enabled == syntax_enabled
+            && self.syntax_ready == syntax_ready
             && self.font_size_bits == font_size.to_bits()
             && self.wrap_bits == wrap.to_bits()
             && self.current_match == current_match
@@ -135,10 +146,10 @@ pub struct EditorTab {
 }
 
 impl EditorTab {
-    pub fn untitled(n: usize) -> Self {
+    pub fn untitled(n: usize, lang: crate::i18n::Lang) -> Self {
         Self {
             path: None,
-            title: format!("Без имени {n}"),
+            title: crate::i18n::untitled(lang, n),
             content: String::new(),
             dirty: false,
             id: egui::Id::new(format!("tab-untitled-{n}")),
@@ -150,11 +161,11 @@ impl EditorTab {
         }
     }
 
-    pub fn from_path(path: PathBuf, content: String) -> Self {
+    pub fn from_path(path: PathBuf, content: String, lang: crate::i18n::Lang) -> Self {
         let title = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Без имени".to_string());
+            .unwrap_or_else(|| crate::i18n::untitled_plain(lang).to_string());
         let id = egui::Id::new(path.to_string_lossy().to_string());
         let large = content.len() as u64 >= LARGE_FILE_BYTES;
         Self {
@@ -174,15 +185,15 @@ impl EditorTab {
     /// Placeholder tab shown immediately while a big file is being read on
     /// a background thread; `EditApp` swaps its contents in once the read
     /// finishes (matched up by `id`, which only depends on `path`).
-    pub fn loading(path: PathBuf) -> Self {
+    pub fn loading(path: PathBuf, lang: crate::i18n::Lang) -> Self {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Без имени".to_string());
+            .unwrap_or_else(|| crate::i18n::untitled_plain(lang).to_string());
         let id = egui::Id::new(path.to_string_lossy().to_string());
         Self {
             path: Some(path),
-            title: format!("{name} (загрузка…)"),
+            title: crate::i18n::loading_title(lang, &name),
             content: String::new(),
             dirty: false,
             id,
@@ -233,12 +244,12 @@ impl EditorTab {
         Ok(())
     }
 
-    pub fn save_as(&mut self, path: PathBuf) -> std::io::Result<()> {
+    pub fn save_as(&mut self, path: PathBuf, lang: crate::i18n::Lang) -> std::io::Result<()> {
         std::fs::write(&path, &self.content)?;
         self.title = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Без имени".to_string());
+            .unwrap_or_else(|| crate::i18n::untitled_plain(lang).to_string());
         self.id = egui::Id::new(path.to_string_lossy().to_string());
         self.path = Some(path);
         self.dirty = false;

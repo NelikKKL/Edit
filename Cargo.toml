@@ -21,6 +21,8 @@ walkdir = "2"
 dirs = "5"
 ttf-parser = "0.20"
 image = { version = "0.25", default-features = false, features = ["png"] }
+sys-locale = "0.3"
+arboard = "3"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
@@ -32,25 +34,7 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
-# ---- Linux .deb packaging (built with `cargo install cargo-deb && cargo deb`) ----
-[package.metadata.deb]
-maintainer = "edit"
-copyright = "2026"
-license-file = ["LICENSE", "0"]
-extended-description = "edit — a fast, modern, notepad-style text editor with syntax highlighting, tabs, a file tree, and CSS-based theming."
-depends = "$auto"
-section = "editors"
-priority = "optional"
-maintainer-scripts = "debian"
-assets = [
-    ["target/release/edit", "usr/bin/", "755"],
-    ["linux/edit.desktop", "usr/share/applications/", "644"],
-    ["assets/hicolor/16x16/apps/edit.png", "usr/share/icons/hicolor/16x16/apps/edit.png", "644"],
-    ["assets/hicolor/24x24/apps/edit.png", "usr/share/icons/hicolor/24x24/apps/edit.png", "644"],
-    ["assets/hicolor/32x32/apps/edit.png", "usr/share/icons/hicolor/32x32/apps/edit.png", "644"],
-    ["assets/hicolor/48x48/apps/edit.png", "usr/share/icons/hicolor/48x48/apps/edit.png", "644"],
-    ["assets/hicolor/64x64/apps/edit.png", "usr/share/icons/hicolor/64x64/apps/edit.png", "644"],
-    ["assets/hicolor/128x128/apps/edit.png", "usr/share/icons/hicolor/128x128/apps/edit.png", "644"],
-    ["assets/hicolor/256x256/apps/edit.png", "usr/share/icons/hicolor/256x256/apps/edit.png", "644"],
-    ["assets/hicolor/512x512/apps/edit.png", "usr/share/icons/hicolor/512x512/apps/edit.png", "644"],
-]
+# Linux packaging is now an AppImage, built in CI straight from
+# `linux/edit.desktop` + `assets/icon.png` via linuxdeploy — see
+# `.github/workflows/build.yml`. No extra Cargo metadata is needed for it
+# (unlike the old cargo-deb setup this replaces).

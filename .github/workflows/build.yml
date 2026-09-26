@@ -42,7 +42,7 @@ jobs:
           name: edit-windows-installer
           path: installer/Output/edit-setup-windows.exe
 
-  build-linux-deb:
+  build-linux-appimage:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,23 +62,55 @@ jobs:
             libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
             libwayland-dev \
             libssl-dev \
-            libfontconfig1-dev
+            libfontconfig1-dev \
+            fuse
 
-      - name: Install cargo-deb
-        run: cargo install cargo-deb --locked
+      - name: Build release binary
+        run: cargo build --release
 
-      - name: Build .deb
-        run: cargo deb
+      # linuxdeploy wants the binary, .desktop file and a hicolor icon tree
+      # laid out inside an AppDir; it reads the icon name straight out of
+      # `Icon=` in the .desktop file (which is "edit"), so the file names
+      # below have to line up with that.
+      - name: Assemble AppDir
+        run: |
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications
+          cp target/release/edit AppDir/usr/bin/edit
+          cp linux/edit.desktop AppDir/usr/share/applications/edit.desktop
+          for size in 16 24 32 48 64 128 256 512; do
+            mkdir -p "AppDir/usr/share/icons/hicolor/${size}x${size}/apps"
+            cp "assets/hicolor/${size}x${size}/apps/edit.png" \
+               "AppDir/usr/share/icons/hicolor/${size}x${size}/apps/edit.png"
+          done
 
-      - name: Upload .deb
+      - name: Download linuxdeploy
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+
+      - name: Build AppImage
+        env:
+          # GitHub Actions runners have no FUSE (needed to mount an
+          # AppImage), so run linuxdeploy pre-extracted instead.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable target/release/edit \
+            --desktop-file linux/edit.desktop \
+            --icon-file assets/icon.png \
+            --output appimage
+          mv edit-*.AppImage edit-linux-x86_64.AppImage
+
+      - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: edit-linux-deb
-          path: target/debian/*.deb
+          name: edit-linux-appimage
+          path: edit-linux-x86_64.AppImage
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-windows, build-linux-deb]
+    needs: [build-windows, build-linux-appimage]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -91,4 +123,4 @@ jobs:
           files: |
             artifacts/edit-windows-exe/edit.exe
             artifacts/edit-windows-installer/edit-setup-windows.exe
-            artifacts/edit-linux-deb/*.deb
+            artifacts/edit-linux-appimage/edit-linux-x86_64.AppImage

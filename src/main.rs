@@ -7,6 +7,7 @@ mod custom_css;
 mod editor_tab;
 mod file_tree;
 mod fonts;
+mod i18n;
 mod search;
 mod settings;
 mod syntax_highlight;

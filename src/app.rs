@@ -46,18 +46,25 @@ impl SettingsPage {
         SettingsPage::Editor,
         SettingsPage::Advanced,
     ];
-    fn label(&self) -> &'static str {
+    fn label(&self, lang: crate::i18n::Lang) -> &'static str {
+        use crate::i18n::t;
         match self {
-            SettingsPage::Appearance => "Внешний вид",
-            SettingsPage::Font => "Шрифт",
-            SettingsPage::Editor => "Редактор",
-            SettingsPage::Advanced => "Дополнительно",
+            SettingsPage::Appearance => t(lang, "settings.appearance"),
+            SettingsPage::Font => t(lang, "settings.font"),
+            SettingsPage::Editor => t(lang, "settings.editor"),
+            SettingsPage::Advanced => t(lang, "settings.advanced"),
         }
     }
 }
 
 pub struct EditApp {
     settings: Settings,
+    /// Resolved interface language: `settings.lang` if the user picked one
+    /// explicitly, otherwise whatever `Lang::detect_system()` returned at
+    /// startup (or when the user last switched back to "follow system").
+    /// Cached here rather than recomputed on every string lookup since
+    /// reading the OS locale isn't free and doesn't change while running.
+    lang: crate::i18n::Lang,
     theme: Theme,
     tabs: Vec<EditorTab>,
     active: usize,
@@ -98,6 +105,12 @@ pub struct EditApp {
 }
 
 impl EditApp {
+    /// Shorthand for `i18n::t(self.lang, key)`, used throughout the UI code
+    /// below instead of hardcoded Russian strings.
+    fn t(&self, key: &str) -> &'static str {
+        crate::i18n::t(self.lang, key)
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>, initial_file: Option<String>) -> Self {
         let settings = Settings::load();
         // Scanning every system font file (to build the family picker in
@@ -108,8 +121,10 @@ impl EditApp {
         // soon as the scan finishes.
         let system_fonts = SystemFonts::scan_async();
         let font_install_pending = settings.font_family.is_some();
+        let lang = settings.lang.unwrap_or_else(crate::i18n::Lang::detect_system);
 
         let mut app = Self {
+            lang,
             theme: Theme::dark(),
             tabs: Vec::new(),
             active: 0,
@@ -149,7 +164,7 @@ impl EditApp {
     // ---------------------------------------------------------------- data
 
     fn new_tab(&mut self) {
-        let tab = EditorTab::untitled(self.untitled_counter);
+        let tab = EditorTab::untitled(self.untitled_counter, self.lang);
         self.untitled_counter += 1;
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
@@ -169,7 +184,7 @@ impl EditApp {
             match std::fs::read_to_string(&path) {
                 Ok(content) => self.insert_loaded_tab(path, content),
                 Err(e) => {
-                    self.status_message = Some(format!("Не удалось открыть файл: {e}"));
+                    self.status_message = Some(crate::i18n::open_file_error(self.lang, &e.to_string()));
                 }
             }
             return;
@@ -179,7 +194,7 @@ impl EditApp {
         // window until the read (and UTF-8 validation) finishes. Show a
         // placeholder tab immediately and do the read on a background
         // thread instead.
-        let tab = EditorTab::loading(path.clone());
+        let tab = EditorTab::loading(path.clone(), self.lang);
         let tab_id = tab.id;
         if self.tabs.len() == 1 && self.tabs[0].path.is_none() && !self.tabs[0].dirty && self.tabs[0].content.is_empty() {
             self.tabs[0] = tab;
@@ -201,10 +216,10 @@ impl EditApp {
     /// single empty "Untitled" tab if that's all there is.
     fn insert_loaded_tab(&mut self, path: PathBuf, content: String) {
         if self.tabs.len() == 1 && self.tabs[0].path.is_none() && !self.tabs[0].dirty && self.tabs[0].content.is_empty() {
-            self.tabs[0] = EditorTab::from_path(path, content);
+            self.tabs[0] = EditorTab::from_path(path, content, self.lang);
             self.active = 0;
         } else {
-            self.tabs.push(EditorTab::from_path(path, content));
+            self.tabs.push(EditorTab::from_path(path, content, self.lang));
             self.active = self.tabs.len() - 1;
         }
     }
@@ -224,7 +239,7 @@ impl EditApp {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     done.push((
                         i,
-                        Err(std::io::Error::new(std::io::ErrorKind::Other, "не удалось прочитать файл")),
+                        Err(std::io::Error::new(std::io::ErrorKind::Other, crate::i18n::could_not_read_file(self.lang))),
                     ));
                 }
             }
@@ -235,11 +250,11 @@ impl EditApp {
             match result {
                 Ok(content) => {
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == pending.tab_id) {
-                        *tab = EditorTab::from_path(pending.path, content);
+                        *tab = EditorTab::from_path(pending.path, content, self.lang);
                     }
                 }
                 Err(e) => {
-                    self.status_message = Some(format!("Не удалось открыть файл: {e}"));
+                    self.status_message = Some(crate::i18n::open_file_error(self.lang, &e.to_string()));
                     if let Some(pos) = self.tabs.iter().position(|t| t.id == pending.tab_id) {
                         self.tabs.remove(pos);
                         if self.tabs.is_empty() {
@@ -254,13 +269,13 @@ impl EditApp {
     }
 
     fn open_file_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new().set_title("Открыть файл").pick_file() {
+        if let Some(path) = rfd::FileDialog::new().set_title(self.t("dialog.open_file")).pick_file() {
             self.open_path(path);
         }
     }
 
     fn open_folder_dialog(&mut self) {
-        if let Some(dir) = rfd::FileDialog::new().set_title("Открыть папку").pick_folder() {
+        if let Some(dir) = rfd::FileDialog::new().set_title(self.t("dialog.open_folder")).pick_folder() {
             self.file_tree.set_root(dir.clone());
             self.settings.show_sidebar = true;
             self.settings.last_folder = Some(dir.to_string_lossy().to_string());
@@ -272,9 +287,9 @@ impl EditApp {
         let Some(tab) = self.tabs.get_mut(idx) else { return };
         if tab.path.is_some() {
             if let Err(e) = tab.save() {
-                self.status_message = Some(format!("Ошибка сохранения: {e}"));
+                self.status_message = Some(crate::i18n::save_error(self.lang, &e.to_string()));
             } else {
-                self.status_message = Some("Сохранено".to_string());
+                self.status_message = Some(self.t("status.saved").to_string());
             }
         } else {
             self.save_tab_as(idx);
@@ -282,12 +297,13 @@ impl EditApp {
     }
 
     fn save_tab_as(&mut self, idx: usize) {
-        if let Some(path) = rfd::FileDialog::new().set_title("Сохранить как").save_file() {
+        let lang = self.lang;
+        if let Some(path) = rfd::FileDialog::new().set_title(self.t("dialog.save_as")).save_file() {
             if let Some(tab) = self.tabs.get_mut(idx) {
-                if let Err(e) = tab.save_as(path) {
-                    self.status_message = Some(format!("Ошибка сохранения: {e}"));
+                if let Err(e) = tab.save_as(path, lang) {
+                    self.status_message = Some(crate::i18n::save_error(self.lang, &e.to_string()));
                 } else {
-                    self.status_message = Some("Сохранено".to_string());
+                    self.status_message = Some(self.t("status.saved").to_string());
                 }
             }
         }
@@ -328,7 +344,7 @@ impl EditApp {
 
     fn load_custom_theme(&mut self) -> Theme {
         let Some(path) = self.settings.custom_css_path.clone() else {
-            self.css_status = Some("Файл темы не выбран — используется тёмная тема по умолчанию.".into());
+            self.css_status = Some(crate::i18n::theme_file_not_selected(self.lang).to_string());
             return Theme::dark();
         };
         match custom_css::parse_css_file(Path::new(&path)) {
@@ -344,7 +360,7 @@ impl EditApp {
                 custom_css::theme_from_css(&parsed)
             }
             Err(e) => {
-                self.css_status = Some(format!("Не удалось прочитать {path}: {e}"));
+                self.css_status = Some(crate::i18n::css_read_failed(self.lang, &path, &e.to_string()));
                 Theme::dark()
             }
         }
@@ -380,7 +396,7 @@ impl EditApp {
                 .or_default()
                 .insert(0, "user_font".to_owned());
         } else {
-            self.status_message = Some(format!("Шрифт «{family}» не найден"));
+            self.status_message = Some(crate::i18n::font_not_found(self.lang, &family));
         }
         drop(state);
         ctx.set_fonts(defs);
@@ -533,36 +549,36 @@ impl EditApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    if ui.button("Открыть").clicked() {
+                    if ui.button(self.t("toolbar.open")).clicked() {
                         self.open_file_dialog();
                     }
-                    if ui.button("Папка").clicked() {
+                    if ui.button(self.t("toolbar.folder")).clicked() {
                         self.open_folder_dialog();
                     }
-                    if ui.button("Сохранить").clicked() {
+                    if ui.button(self.t("toolbar.save")).clicked() {
                         self.save_tab(self.active);
                     }
-                    if ui.button("Сохранить как").clicked() {
+                    if ui.button(self.t("dialog.save_as")).clicked() {
                         self.save_tab_as(self.active);
                     }
                     ui.separator();
-                    if ui.button("Поиск").clicked() {
+                    if ui.button(self.t("toolbar.search")).clicked() {
                         self.search.open();
                     }
                     if ui
-                        .selectable_label(self.settings.show_sidebar, "Дерево")
+                        .selectable_label(self.settings.show_sidebar, self.t("toolbar.tree"))
                         .clicked()
                     {
                         self.settings.show_sidebar = !self.settings.show_sidebar;
                         self.settings.save();
                     }
                     ui.separator();
-                    if ui.button("+").on_hover_text("Новая вкладка (Ctrl+N)").clicked() {
+                    if ui.button("+").on_hover_text(self.t("toolbar.new_tab_tooltip")).clicked() {
                         self.new_tab();
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Настройки").clicked() {
+                        if ui.button(self.t("toolbar.settings")).clicked() {
                             self.show_settings = true;
                         }
                     });
@@ -625,9 +641,9 @@ impl EditApp {
                     .inner_margin(Margin::same(8.0)),
             )
             .show(ctx, |ui| {
-                ui.label(RichText::new("ФАЙЛЫ").color(theme.fg_dim).small());
+                ui.label(RichText::new(self.t("sidebar.files_header")).color(theme.fg_dim).small());
                 ui.add_space(4.0);
-                match self.file_tree.ui(ui, &theme) {
+                match self.file_tree.ui(ui, &theme, self.lang) {
                     TreeAction::OpenFile(path) => self.open_path(path),
                     TreeAction::None => {}
                 }
@@ -640,7 +656,7 @@ impl EditApp {
             .frame(Frame::none().fill(theme.editor_bg))
             .show(ctx, |ui| {
                 if self.tabs.is_empty() {
-                    ui.centered_and_justified(|ui| ui.weak("Нет открытых файлов"));
+                    ui.centered_and_justified(|ui| ui.weak(self.t("editor.no_open_files")));
                     return;
                 }
                 let idx = self.active.min(self.tabs.len() - 1);
@@ -650,7 +666,7 @@ impl EditApp {
                     ui.centered_and_justified(|ui| {
                         ui.horizontal(|ui| {
                             ui.spinner();
-                            ui.weak("Загрузка файла…");
+                            ui.weak(self.t("editor.loading_file"));
                         });
                     });
                     return;
@@ -720,6 +736,7 @@ impl EditApp {
                                 let effective_wrap = if word_wrap { wrap_width } else { f32::INFINITY };
                                 let mut cache = cache_ref.borrow_mut();
 
+                                let syntax_ready = highlighter.is_ready();
                                 let hit = cache.as_ref().is_some_and(|c| {
                                     c.matches(
                                         text,
@@ -727,6 +744,7 @@ impl EditApp {
                                         dark,
                                         default_color,
                                         syntax_enabled,
+                                        syntax_ready,
                                         font_id_c.size,
                                         effective_wrap,
                                         &ranges_c,
@@ -758,6 +776,7 @@ impl EditApp {
                                         dark,
                                         default_color,
                                         syntax_enabled,
+                                        syntax_ready,
                                         font_id_c.size,
                                         effective_wrap,
                                         ranges_c.clone(),
@@ -783,6 +802,82 @@ impl EditApp {
 
                             drop(layouter);
                             self.tabs[idx].highlight_cache = cache_cell.into_inner();
+
+                            // Right-click (or long-press, on touch) context menu with the
+                            // usual Cut/Copy/Paste/Select all actions — `TextEdit` doesn't
+                            // provide one on its own, only keyboard shortcuts.
+                            let lang = self.lang;
+                            output.response.context_menu(|ui| {
+                                let has_selection = output
+                                    .cursor_range
+                                    .is_some_and(|r| r.primary.ccursor.index != r.secondary.ccursor.index);
+
+                                if ui
+                                    .add_enabled(has_selection, egui::Button::new(crate::i18n::t(lang, "context_menu.cut")))
+                                    .clicked()
+                                {
+                                    if let Some(cursor_range) = output.cursor_range {
+                                        let (lo, hi) = selection_byte_range(&self.tabs[idx].content, &cursor_range);
+                                        if lo != hi {
+                                            let cut = self.tabs[idx].content[lo..hi].to_string();
+                                            ui.ctx().output_mut(|o| o.copied_text = cut);
+                                            self.tabs[idx].content.replace_range(lo..hi, "");
+                                            self.tabs[idx].touch();
+                                            self.tabs[idx].dirty = true;
+                                        }
+                                    }
+                                    ui.close_menu();
+                                }
+
+                                if ui
+                                    .add_enabled(has_selection, egui::Button::new(crate::i18n::t(lang, "context_menu.copy")))
+                                    .clicked()
+                                {
+                                    if let Some(cursor_range) = output.cursor_range {
+                                        let (lo, hi) = selection_byte_range(&self.tabs[idx].content, &cursor_range);
+                                        if lo != hi {
+                                            let copied = self.tabs[idx].content[lo..hi].to_string();
+                                            ui.ctx().output_mut(|o| o.copied_text = copied);
+                                        }
+                                    }
+                                    ui.close_menu();
+                                }
+
+                                if ui.button(crate::i18n::t(lang, "context_menu.paste")).clicked() {
+                                    // egui only sees pasted text through OS paste *events*
+                                    // (Ctrl+V), it has no on-demand "read the clipboard now"
+                                    // API — so a clipboard-reading crate is needed to back a
+                                    // clickable Paste menu item.
+                                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                        if let Ok(text) = clipboard.get_text() {
+                                            let (lo, hi) = output
+                                                .cursor_range
+                                                .map(|r| selection_byte_range(&self.tabs[idx].content, &r))
+                                                .unwrap_or_else(|| {
+                                                    let end = self.tabs[idx].content.len();
+                                                    (end, end)
+                                                });
+                                            self.tabs[idx].content.replace_range(lo..hi, &text);
+                                            self.tabs[idx].touch();
+                                            self.tabs[idx].dirty = true;
+                                        }
+                                    }
+                                    ui.close_menu();
+                                }
+
+                                ui.separator();
+
+                                if ui.button(crate::i18n::t(lang, "context_menu.select_all")).clicked() {
+                                    let char_count = self.tabs[idx].content.chars().count();
+                                    let mut state = egui::TextEditState::load(ui.ctx(), tab_id).unwrap_or_default();
+                                    state.set_ccursor_range(Some(egui::text::CCursorRange::two(
+                                        egui::text::CCursor::new(0),
+                                        egui::text::CCursor::new(char_count),
+                                    )));
+                                    egui::TextEditState::store(state, ui.ctx(), tab_id);
+                                    ui.close_menu();
+                                }
+                            });
 
                             if output.response.changed() {
                                 self.tabs[idx].touch();
@@ -869,7 +964,7 @@ impl EditApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!("Строка {}, Столбец {}", self.status_line_col.0, self.status_line_col.1))
+                        RichText::new(crate::i18n::line_col(self.lang, self.status_line_col.0, self.status_line_col.1))
                             .color(self.theme.fg_dim)
                             .small(),
                     );
@@ -884,7 +979,7 @@ impl EditApp {
                         if let Some(msg) = &self.status_message {
                             ui.label(RichText::new(msg).color(self.theme.accent).small());
                         }
-                        ui.label(RichText::new(self.settings.theme.label()).color(self.theme.fg_dim).small());
+                        ui.label(RichText::new(self.settings.theme.label(self.lang)).color(self.theme.fg_dim).small());
                     });
                 });
             });
@@ -899,7 +994,7 @@ impl EditApp {
 
         let matches = self.search_matches();
 
-        egui::Window::new("Поиск")
+        egui::Window::new(self.t("toolbar.search"))
             .open(&mut still_open)
             .collapsible(false)
             .resizable(true)
@@ -920,16 +1015,16 @@ impl EditApp {
                 if resp.changed() {
                     self.search.current_match = 0;
                 }
-                ui.checkbox(&mut self.search.match_case, "Учитывать регистр");
+                ui.checkbox(&mut self.search.match_case, self.t("search.case_sensitive"));
 
                 ui.horizontal(|ui| {
                     if matches.is_empty() {
-                        ui.weak(if self.search.query.is_empty() { "" } else { "Нет совпадений" });
+                        ui.weak(if self.search.query.is_empty() { "" } else { self.t("search.no_matches") });
                     } else {
                         ui.label(format!("{} / {}", self.search.current_match + 1, matches.len()));
                     }
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Закрыть").clicked() {
+                        if ui.button(self.t("common.close")).clicked() {
                             self.search.close();
                         }
                         if ui.button(">").clicked() && !matches.is_empty() {
@@ -959,7 +1054,7 @@ impl EditApp {
         let mut open = true;
         let mut theme_changed = false;
 
-        egui::Window::new("Настройки")
+        egui::Window::new(self.t("toolbar.settings"))
             .open(&mut open)
             .resizable(true)
             .default_size([600.0, 440.0])
@@ -973,7 +1068,7 @@ impl EditApp {
                     ui.vertical(|ui| {
                         ui.set_width(170.0);
                         for page in SettingsPage::ALL {
-                            if ui.selectable_label(self.settings_page == page, page.label()).clicked() {
+                            if ui.selectable_label(self.settings_page == page, page.label(self.lang)).clicked() {
                                 self.settings_page = page;
                             }
                         }
@@ -981,11 +1076,11 @@ impl EditApp {
                     ui.separator();
                     ui.vertical(|ui| match self.settings_page {
                         SettingsPage::Appearance => {
-                            ui.heading("Тема");
+                            ui.heading(self.t("settings.theme"));
                             ui.add_space(6.0);
                             for kind in ThemeKind::ALL {
                                 if ui
-                                    .radio_value(&mut self.settings.theme, kind, kind.label())
+                                    .radio_value(&mut self.settings.theme, kind, kind.label(self.lang))
                                     .clicked()
                                 {
                                     theme_changed = true;
@@ -993,18 +1088,18 @@ impl EditApp {
                             }
                         }
                         SettingsPage::Font => {
-                            ui.heading("Шрифт");
+                            ui.heading(self.t("settings.font"));
                             ui.add_space(6.0);
-                            let current = self.settings.font_family.clone().unwrap_or_else(|| "Встроенный (моно)".to_string());
+                            let current = self.settings.font_family.clone().unwrap_or_else(|| self.t("settings.builtin_mono").to_string());
                             let (fonts_ready, font_names) = self
                                 .system_fonts
                                 .lock()
                                 .map(|s| (s.is_ready(), s.names()))
                                 .unwrap_or((false, Vec::new()));
-                            egui::ComboBox::from_label("Семейство шрифта")
+                            egui::ComboBox::from_label(self.t("settings.font_family"))
                                 .selected_text(current)
                                 .show_ui(ui, |ui| {
-                                    if ui.selectable_label(self.settings.font_family.is_none(), "Встроенный (моно)").clicked() {
+                                    if ui.selectable_label(self.settings.font_family.is_none(), self.t("settings.builtin_mono")).clicked() {
                                         self.settings.font_family = None;
                                         theme_changed = true;
                                     }
@@ -1018,41 +1113,65 @@ impl EditApp {
                                 });
                             if !fonts_ready {
                                 ui.add_space(4.0);
-                                ui.weak("Сканирование системных шрифтов…");
+                                ui.weak(self.t("settings.scanning_fonts"));
                             }
                             ui.add_space(8.0);
-                            if ui.add(egui::Slider::new(&mut self.settings.font_size, 8.0..=36.0).text("Размер шрифта")).changed() {
+                            if ui.add(egui::Slider::new(&mut self.settings.font_size, 8.0..=36.0).text(self.t("settings.font_size"))).changed() {
                                 self.settings.save();
                             }
                         }
                         SettingsPage::Editor => {
-                            ui.heading("Редактор");
+                            ui.heading(self.t("settings.editor"));
                             ui.add_space(6.0);
-                            ui.checkbox(&mut self.settings.show_line_numbers, "Нумерация строк");
-                            ui.checkbox(&mut self.settings.syntax_highlighting, "Подсветка синтаксиса");
-                            ui.checkbox(&mut self.settings.auto_close_brackets, "Автозакрытие скобок и кавычек");
-                            ui.checkbox(&mut self.settings.word_wrap, "Перенос строк");
-                            ui.checkbox(&mut self.settings.show_sidebar, "Показывать дерево файлов");
+                            ui.checkbox(&mut self.settings.show_line_numbers, self.t("settings.line_numbers"));
+                            ui.checkbox(&mut self.settings.syntax_highlighting, self.t("settings.syntax_highlight"));
+                            ui.checkbox(&mut self.settings.auto_close_brackets, self.t("settings.autoclose"));
+                            ui.checkbox(&mut self.settings.word_wrap, self.t("settings.word_wrap"));
+                            ui.checkbox(&mut self.settings.show_sidebar, self.t("settings.show_tree"));
                             ui.add_space(8.0);
-                            ui.add(egui::Slider::new(&mut self.settings.tab_width, 1..=8).text("Ширина табуляции"));
+                            ui.add(egui::Slider::new(&mut self.settings.tab_width, 1..=8).text(self.t("settings.tab_width")));
                         }
                         SettingsPage::Advanced => {
-                            ui.heading("CSS-тема");
-                            ui.label("Свой файл темы (переменные --bg, --fg, --accent, --font-family, ...).");
+                            ui.heading(self.t("settings.language"));
+                            ui.add_space(6.0);
+                            let system_lang = crate::i18n::Lang::detect_system();
+                            egui::ComboBox::from_id_source("lang_combo")
+                                .selected_text(match self.settings.lang {
+                                    None => self.t("settings.language_system"),
+                                    Some(l) => l.label(),
+                                })
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(self.settings.lang.is_none(), self.t("settings.language_system")).clicked() {
+                                        self.settings.lang = None;
+                                        self.lang = system_lang;
+                                        self.settings.save();
+                                    }
+                                    for l in [crate::i18n::Lang::Ru, crate::i18n::Lang::En] {
+                                        if ui.selectable_label(self.settings.lang == Some(l), l.label()).clicked() {
+                                            self.settings.lang = Some(l);
+                                            self.lang = l;
+                                            self.settings.save();
+                                        }
+                                    }
+                                });
+                            ui.add_space(16.0);
+
+                            ui.heading(self.t("settings.css_theme"));
+                            ui.label(self.t("settings.css_theme_desc"));
                             ui.add_space(6.0);
                             let mut path_str = self.settings.custom_css_path.clone().unwrap_or_default();
                             ui.horizontal(|ui| {
                                 if ui.text_edit_singleline(&mut path_str).changed() {
                                     self.settings.custom_css_path = if path_str.is_empty() { None } else { Some(path_str.clone()) };
                                 }
-                                if ui.button("Обзор…").clicked() {
+                                if ui.button(self.t("settings.browse")).clicked() {
                                     if let Some(p) = rfd::FileDialog::new().add_filter("CSS", &["css"]).pick_file() {
                                         self.settings.custom_css_path = Some(p.to_string_lossy().to_string());
                                     }
                                 }
                             });
                             ui.horizontal(|ui| {
-                                if ui.button("Создать пример theme.css").clicked() {
+                                if ui.button(self.t("settings.create_example_css")).clicked() {
                                     if let Some(default_path) = Settings::default_css_path() {
                                         if let Some(dir) = default_path.parent() {
                                             let _ = std::fs::create_dir_all(dir);
@@ -1062,11 +1181,11 @@ impl EditApp {
                                         }
                                     }
                                 }
-                                if ui.button("Применить как тему").clicked() {
+                                if ui.button(self.t("settings.apply_as_theme")).clicked() {
                                     self.settings.theme = ThemeKind::Custom;
                                     theme_changed = true;
                                 }
-                                if ui.button("Перечитать CSS").clicked() {
+                                if ui.button(self.t("settings.reread_css")).clicked() {
                                     theme_changed = true;
                                 }
                             });
@@ -1089,25 +1208,25 @@ impl EditApp {
         let Some(idx) = self.close_confirm else { return };
         let theme = self.theme.clone();
         let title = self.tabs.get(idx).map(|t| t.title.clone()).unwrap_or_default();
-        egui::Window::new("Несохранённые изменения")
+        egui::Window::new(self.t("close_confirm.title"))
             .collapsible(false)
             .resizable(false)
             .anchor(Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .frame(Frame::window(&ctx.style()).fill(theme.panel_bg).stroke(Stroke::new(1.0_f32, theme.border)))
             .show(ctx, |ui| {
-                ui.label(format!("Сохранить изменения в «{title}»?"));
+                ui.label(crate::i18n::save_changes_prompt(self.lang, &title));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Сохранить").clicked() {
+                    if ui.button(self.t("toolbar.save")).clicked() {
                         self.save_tab(idx);
                         self.close_tab_now(idx);
                         self.close_confirm = None;
                     }
-                    if ui.button("Не сохранять").clicked() {
+                    if ui.button(self.t("close_confirm.dont_save")).clicked() {
                         self.close_tab_now(idx);
                         self.close_confirm = None;
                     }
-                    if ui.button("Отмена").clicked() {
+                    if ui.button(self.t("common.cancel")).clicked() {
                         self.close_confirm = None;
                     }
                 });
@@ -1214,4 +1333,25 @@ fn line_col_of(text: &str, char_offset: usize) -> (usize, usize) {
         }
     }
     (line, col)
+}
+
+/// Converts a `CCursor`-style char index (as used by egui's `TextEdit`
+/// cursor/selection API) into a byte offset usable with `String`'s own
+/// (byte-indexed) slicing and `replace_range`.
+fn char_index_to_byte(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .nth(char_index)
+        .map(|(b, _)| b)
+        .unwrap_or(text.len())
+}
+
+/// Sorted `(start, end)` byte range of the current selection, from a
+/// `TextEdit`'s `cursor_range` output. `start == end` when there's no
+/// selection, just a caret position — still useful as the insertion point
+/// for Paste.
+fn selection_byte_range(text: &str, cursor_range: &egui::text::CursorRange) -> (usize, usize) {
+    let a = cursor_range.primary.ccursor.index;
+    let b = cursor_range.secondary.ccursor.index;
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    (char_index_to_byte(text, lo), char_index_to_byte(text, hi))
 }
