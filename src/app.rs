@@ -91,6 +91,16 @@ pub struct EditApp {
     /// just to keep repainting the status bar; only recompute when the
     /// cursor actually moved.
     cursor_cache: Option<(egui::Id, usize, (usize, usize))>,
+    /// The most recent non-empty text selection: `(tab id, start byte,
+    /// end byte)`. `TextEdit` collapses the selection to a caret as part
+    /// of processing the very click that opens our right-click context
+    /// menu (it doesn't special-case the secondary mouse button for
+    /// cursor placement), so by the time the menu's `Cut`/`Copy` handlers
+    /// run, `output.cursor_range` for *that* frame is already empty. This
+    /// field is only ever updated while the selection is non-empty, so it
+    /// keeps the last real selection around for the menu to act on
+    /// instead of "nothing selected".
+    last_selection: Option<(egui::Id, usize, usize)>,
 
     show_settings: bool,
     settings_page: SettingsPage,
@@ -138,6 +148,7 @@ impl EditApp {
             search_cache_key: None,
             search_cache_ranges: Vec::new(),
             cursor_cache: None,
+            last_selection: None,
             show_settings: false,
             settings_page: SettingsPage::Appearance,
             css_status: None,
@@ -687,6 +698,11 @@ impl EditApp {
                 let current_match_bg = theme.accent.gamma_multiply(0.65);
                 let extension = self.tabs[idx].extension();
                 let tab_id = self.tabs[idx].id;
+                // Drop any stale cached selection from a different tab so
+                // the context menu never acts on another file's text.
+                if self.last_selection.is_some_and(|(id, _, _)| id != tab_id) {
+                    self.last_selection = None;
+                }
                 let tab_large = self.tabs[idx].large;
 
                 let search_ranges = self.search_matches();
@@ -803,28 +819,38 @@ impl EditApp {
                             drop(layouter);
                             self.tabs[idx].highlight_cache = cache_cell.into_inner();
 
+                            // Remember the selection while it's non-empty (see
+                            // `last_selection`'s doc comment for why: the click that
+                            // opens the context menu below already collapses
+                            // `output.cursor_range` for *this* frame).
+                            if let Some(cursor_range) = output.cursor_range {
+                                let (lo, hi) = selection_byte_range(&self.tabs[idx].content, &cursor_range);
+                                if lo != hi {
+                                    self.last_selection = Some((tab_id, lo, hi));
+                                }
+                            }
+
                             // Right-click (or long-press, on touch) context menu with the
                             // usual Cut/Copy/Paste/Select all actions — `TextEdit` doesn't
                             // provide one on its own, only keyboard shortcuts.
                             let lang = self.lang;
                             output.response.context_menu(|ui| {
-                                let has_selection = output
-                                    .cursor_range
-                                    .is_some_and(|r| r.primary.ccursor.index != r.secondary.ccursor.index);
+                                let selection = self
+                                    .last_selection
+                                    .filter(|(id, lo, hi)| *id == tab_id && lo != hi);
+                                let has_selection = selection.is_some();
 
                                 if ui
                                     .add_enabled(has_selection, egui::Button::new(crate::i18n::t(lang, "context_menu.cut")))
                                     .clicked()
                                 {
-                                    if let Some(cursor_range) = output.cursor_range {
-                                        let (lo, hi) = selection_byte_range(&self.tabs[idx].content, &cursor_range);
-                                        if lo != hi {
-                                            let cut = self.tabs[idx].content[lo..hi].to_string();
-                                            ui.ctx().output_mut(|o| o.copied_text = cut);
-                                            self.tabs[idx].content.replace_range(lo..hi, "");
-                                            self.tabs[idx].touch();
-                                            self.tabs[idx].dirty = true;
-                                        }
+                                    if let Some((_, lo, hi)) = selection {
+                                        let cut = self.tabs[idx].content[lo..hi].to_string();
+                                        ui.ctx().output_mut(|o| o.copied_text = cut);
+                                        self.tabs[idx].content.replace_range(lo..hi, "");
+                                        self.tabs[idx].touch();
+                                        self.tabs[idx].dirty = true;
+                                        self.last_selection = None;
                                     }
                                     ui.close_menu();
                                 }
@@ -833,12 +859,9 @@ impl EditApp {
                                     .add_enabled(has_selection, egui::Button::new(crate::i18n::t(lang, "context_menu.copy")))
                                     .clicked()
                                 {
-                                    if let Some(cursor_range) = output.cursor_range {
-                                        let (lo, hi) = selection_byte_range(&self.tabs[idx].content, &cursor_range);
-                                        if lo != hi {
-                                            let copied = self.tabs[idx].content[lo..hi].to_string();
-                                            ui.ctx().output_mut(|o| o.copied_text = copied);
-                                        }
+                                    if let Some((_, lo, hi)) = selection {
+                                        let copied = self.tabs[idx].content[lo..hi].to_string();
+                                        ui.ctx().output_mut(|o| o.copied_text = copied);
                                     }
                                     ui.close_menu();
                                 }
@@ -850,9 +873,13 @@ impl EditApp {
                                     // clickable Paste menu item.
                                     if let Ok(mut clipboard) = arboard::Clipboard::new() {
                                         if let Ok(text) = clipboard.get_text() {
-                                            let (lo, hi) = output
-                                                .cursor_range
-                                                .map(|r| selection_byte_range(&self.tabs[idx].content, &r))
+                                            let (lo, hi) = selection
+                                                .map(|(_, lo, hi)| (lo, hi))
+                                                .or_else(|| {
+                                                    output
+                                                        .cursor_range
+                                                        .map(|r| selection_byte_range(&self.tabs[idx].content, &r))
+                                                })
                                                 .unwrap_or_else(|| {
                                                     let end = self.tabs[idx].content.len();
                                                     (end, end)
@@ -860,6 +887,7 @@ impl EditApp {
                                             self.tabs[idx].content.replace_range(lo..hi, &text);
                                             self.tabs[idx].touch();
                                             self.tabs[idx].dirty = true;
+                                            self.last_selection = None;
                                         }
                                     }
                                     ui.close_menu();
@@ -875,6 +903,7 @@ impl EditApp {
                                         egui::text::CCursor::new(char_count),
                                     )));
                                     egui::text_edit::TextEditState::store(state, ui.ctx(), tab_id);
+                                    self.last_selection = Some((tab_id, 0, self.tabs[idx].content.len()));
                                     ui.close_menu();
                                 }
                             });
