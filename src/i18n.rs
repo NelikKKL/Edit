@@ -41,7 +41,7 @@ impl Lang {
 /// Falls back to the key itself for anything unmapped, so a missing
 /// translation shows up as an obviously-wrong string in the UI rather than
 /// silently rendering blank.
-pub fn t(lang: Lang, key: &str) -> &'static str {
+pub fn t(lang: Lang, key: &'static str) -> &'static str {
     use Lang::*;
     match (lang, key) {
         // ---- settings pages ----

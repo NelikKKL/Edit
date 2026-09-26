@@ -107,7 +107,7 @@ pub struct EditApp {
 impl EditApp {
     /// Shorthand for `i18n::t(self.lang, key)`, used throughout the UI code
     /// below instead of hardcoded Russian strings.
-    fn t(&self, key: &str) -> &'static str {
+    fn t(&self, key: &'static str) -> &'static str {
         crate::i18n::t(self.lang, key)
     }
 
@@ -869,12 +869,12 @@ impl EditApp {
 
                                 if ui.button(crate::i18n::t(lang, "context_menu.select_all")).clicked() {
                                     let char_count = self.tabs[idx].content.chars().count();
-                                    let mut state = egui::TextEditState::load(ui.ctx(), tab_id).unwrap_or_default();
+                                    let mut state = egui::text_edit::TextEditState::load(ui.ctx(), tab_id).unwrap_or_default();
                                     state.set_ccursor_range(Some(egui::text::CCursorRange::two(
                                         egui::text::CCursor::new(0),
                                         egui::text::CCursor::new(char_count),
                                     )));
-                                    egui::TextEditState::store(state, ui.ctx(), tab_id);
+                                    egui::text_edit::TextEditState::store(state, ui.ctx(), tab_id);
                                     ui.close_menu();
                                 }
                             });
@@ -1015,7 +1015,8 @@ impl EditApp {
                 if resp.changed() {
                     self.search.current_match = 0;
                 }
-                ui.checkbox(&mut self.search.match_case, self.t("search.case_sensitive"));
+                let case_sensitive_label = self.t("search.case_sensitive");
+                ui.checkbox(&mut self.search.match_case, case_sensitive_label);
 
                 ui.horizontal(|ui| {
                     if matches.is_empty() {
@@ -1116,20 +1117,27 @@ impl EditApp {
                                 ui.weak(self.t("settings.scanning_fonts"));
                             }
                             ui.add_space(8.0);
-                            if ui.add(egui::Slider::new(&mut self.settings.font_size, 8.0..=36.0).text(self.t("settings.font_size"))).changed() {
+                            let font_size_label = self.t("settings.font_size");
+                            if ui.add(egui::Slider::new(&mut self.settings.font_size, 8.0..=36.0).text(font_size_label)).changed() {
                                 self.settings.save();
                             }
                         }
                         SettingsPage::Editor => {
                             ui.heading(self.t("settings.editor"));
                             ui.add_space(6.0);
-                            ui.checkbox(&mut self.settings.show_line_numbers, self.t("settings.line_numbers"));
-                            ui.checkbox(&mut self.settings.syntax_highlighting, self.t("settings.syntax_highlight"));
-                            ui.checkbox(&mut self.settings.auto_close_brackets, self.t("settings.autoclose"));
-                            ui.checkbox(&mut self.settings.word_wrap, self.t("settings.word_wrap"));
-                            ui.checkbox(&mut self.settings.show_sidebar, self.t("settings.show_tree"));
+                            let line_numbers_label = self.t("settings.line_numbers");
+                            ui.checkbox(&mut self.settings.show_line_numbers, line_numbers_label);
+                            let syntax_label = self.t("settings.syntax_highlight");
+                            ui.checkbox(&mut self.settings.syntax_highlighting, syntax_label);
+                            let autoclose_label = self.t("settings.autoclose");
+                            ui.checkbox(&mut self.settings.auto_close_brackets, autoclose_label);
+                            let word_wrap_label = self.t("settings.word_wrap");
+                            ui.checkbox(&mut self.settings.word_wrap, word_wrap_label);
+                            let show_tree_label = self.t("settings.show_tree");
+                            ui.checkbox(&mut self.settings.show_sidebar, show_tree_label);
                             ui.add_space(8.0);
-                            ui.add(egui::Slider::new(&mut self.settings.tab_width, 1..=8).text(self.t("settings.tab_width")));
+                            let tab_width_label = self.t("settings.tab_width");
+                            ui.add(egui::Slider::new(&mut self.settings.tab_width, 1..=8).text(tab_width_label));
                         }
                         SettingsPage::Advanced => {
                             ui.heading(self.t("settings.language"));
