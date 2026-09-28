@@ -163,6 +163,10 @@ pub struct EditorTab {
     /// actually drawn: building a `TextureHandle` needs an `egui::Context`,
     /// which isn't available wherever a tab gets constructed.
     pub image_texture: Option<egui::TextureHandle>,
+
+    /// The built-in Settings editor (VS Code opens its settings as an
+    /// editor tab too, not a dialog). `content` stays empty and unused.
+    pub is_settings: bool,
 }
 
 impl EditorTab {
@@ -180,6 +184,7 @@ impl EditorTab {
             highlight_cache: None,
             image_bytes: None,
             image_texture: None,
+            is_settings: false,
         }
     }
 
@@ -203,6 +208,7 @@ impl EditorTab {
             highlight_cache: None,
             image_bytes: None,
             image_texture: None,
+            is_settings: false,
         }
     }
 
@@ -228,6 +234,7 @@ impl EditorTab {
             highlight_cache: None,
             image_bytes: None,
             image_texture: None,
+            is_settings: false,
         }
     }
 
@@ -253,6 +260,7 @@ impl EditorTab {
             highlight_cache: None,
             image_bytes: Some(Arc::from(bytes)),
             image_texture: None,
+            is_settings: false,
         }
     }
 
@@ -260,6 +268,31 @@ impl EditorTab {
     /// an ordinary text tab.
     pub fn is_image(&self) -> bool {
         self.image_bytes.is_some()
+    }
+
+    /// The Settings editor tab (see `is_settings`).
+    pub fn settings(title: String) -> Self {
+        Self {
+            path: None,
+            title,
+            content: String::new(),
+            dirty: false,
+            id: egui::Id::new("tab-settings"),
+            loading: false,
+            large: false,
+            version: 0,
+            line_count_cache: None,
+            highlight_cache: None,
+            image_bytes: None,
+            image_texture: None,
+            is_settings: true,
+        }
+    }
+
+    /// Tabs that aren't editable text (image preview, settings): nothing
+    /// to save, and they must never be recycled as the "empty untitled" tab.
+    pub fn is_special(&self) -> bool {
+        self.is_image() || self.is_settings
     }
 
     /// Call after directly mutating `content` outside of the normal
@@ -294,7 +327,7 @@ impl EditorTab {
     }
 
     pub fn save(&mut self) -> std::io::Result<()> {
-        if self.is_image() {
+        if self.is_special() {
             // Images aren't edited — nothing to write back.
             return Ok(());
         }
@@ -306,7 +339,7 @@ impl EditorTab {
     }
 
     pub fn save_as(&mut self, path: PathBuf, lang: crate::i18n::Lang) -> std::io::Result<()> {
-        if self.is_image() {
+        if self.is_special() {
             return Ok(());
         }
         std::fs::write(&path, &self.content)?;
