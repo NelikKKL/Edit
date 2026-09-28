@@ -101,6 +101,14 @@ pub struct EditApp {
     /// keeps the last real selection around for the menu to act on
     /// instead of "nothing selected".
     last_selection: Option<(egui::Id, usize, usize)>,
+    /// Set by the context-menu closure every frame the menu is showing, and
+    /// read (and reset) at the start of the next frame's editor pass. While
+    /// it's true the editor re-applies `last_selection` and re-requests
+    /// keyboard focus before drawing: clicking a menu item counts as
+    /// "clicking elsewhere" for the `TextEdit`, which drops focus — and
+    /// egui only paints a selection for the focused text field — so without
+    /// this the highlight vanishes as soon as the menu opens.
+    context_menu_open: bool,
 
     show_settings: bool,
     settings_page: SettingsPage,
@@ -149,6 +157,7 @@ impl EditApp {
             search_cache_ranges: Vec::new(),
             cursor_cache: None,
             last_selection: None,
+            context_menu_open: false,
             show_settings: false,
             settings_page: SettingsPage::Appearance,
             css_status: None,
@@ -899,6 +908,30 @@ impl EditApp {
                                 ui.fonts(|f| f.layout_job(job))
                             };
 
+                            // Keep the selection visible while the context menu is (or is
+                            // about to be) open: re-apply it to the widget's state and
+                            // take focus back before the text is drawn. See
+                            // `context_menu_open` for why focus matters.
+                            let menu_was_open = std::mem::take(&mut self.context_menu_open);
+                            let secondary_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
+                            if menu_was_open || secondary_down {
+                                if let Some((id, lo, hi)) = self.last_selection {
+                                    let content = &self.tabs[idx].content;
+                                    if id == tab_id && lo != hi && content.is_char_boundary(lo) && content.is_char_boundary(hi) {
+                                        let a = content[..lo].chars().count();
+                                        let b = content[..hi].chars().count();
+                                        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), tab_id).unwrap_or_default();
+                                        state.set_ccursor_range(Some(egui::text::CCursorRange::two(
+                                            egui::text::CCursor::new(a),
+                                            egui::text::CCursor::new(b),
+                                        )));
+                                        egui::text_edit::TextEditState::store(state, ui.ctx(), tab_id);
+                                        ui.memory_mut(|m| m.request_focus(tab_id));
+                                        ui.ctx().request_repaint();
+                                    }
+                                }
+                            }
+
                             let output = egui::TextEdit::multiline(&mut self.tabs[idx].content)
                                 .id(tab_id)
                                 .font(font_id.clone())
@@ -914,12 +947,21 @@ impl EditApp {
                             // Remember the selection while it's non-empty (see
                             // `last_selection`'s doc comment for why: the click that
                             // opens the context menu below already collapses
-                            // `output.cursor_range` for *this* frame).
-                            if let Some(cursor_range) = output.cursor_range {
+                            // `output.cursor_range` for *this* frame). Forget it once
+                            // the selection is really gone — content edited, or the
+                            // caret collapsed by something other than a right-click /
+                            // the open menu — so a stale range never resurfaces.
+                            if output.response.changed() {
+                                self.last_selection = None;
+                            }
+                            let selection_now = output.cursor_range.and_then(|cursor_range| {
                                 let (lo, hi) = selection_byte_range(&self.tabs[idx].content, &cursor_range);
-                                if lo != hi {
-                                    self.last_selection = Some((tab_id, lo, hi));
-                                }
+                                (lo != hi).then_some((lo, hi))
+                            });
+                            if let Some((lo, hi)) = selection_now {
+                                self.last_selection = Some((tab_id, lo, hi));
+                            } else if !menu_was_open && !secondary_down && !output.response.secondary_clicked() {
+                                self.last_selection = None;
                             }
 
                             // Right-click (or long-press, on touch) context menu with the
@@ -927,9 +969,11 @@ impl EditApp {
                             // provide one on its own, only keyboard shortcuts.
                             let lang = self.lang;
                             output.response.context_menu(|ui| {
-                                let selection = self
-                                    .last_selection
-                                    .filter(|(id, lo, hi)| *id == tab_id && lo != hi);
+                                self.context_menu_open = true;
+                                let content_ref = &self.tabs[idx].content;
+                                let selection = self.last_selection.filter(|(id, lo, hi)| {
+                                    *id == tab_id && lo != hi && content_ref.is_char_boundary(*lo) && content_ref.is_char_boundary(*hi)
+                                });
                                 let has_selection = selection.is_some();
 
                                 if ui
