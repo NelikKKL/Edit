@@ -3,8 +3,10 @@
 
 mod app;
 mod autoclose;
+mod codicons;
 mod custom_css;
 mod editor_tab;
+mod file_icons;
 mod file_tree;
 mod fonts;
 mod i18n;

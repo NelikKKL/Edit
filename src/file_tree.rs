@@ -1,3 +1,5 @@
+use crate::codicons;
+use crate::file_icons;
 use crate::i18n::{t, Lang};
 use crate::theme::Theme;
 use std::path::{Path, PathBuf};
@@ -55,7 +57,29 @@ impl FileTree {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| dir.to_string_lossy().to_string());
 
-        let header = egui::CollapsingHeader::new(name)
+        // Icon and name use different fonts (Codicons vs. the UI font), so the
+        // header title is a two-section LayoutJob rather than a plain string.
+        let mut title = egui::text::LayoutJob::default();
+        title.append(
+            codicons::FOLDER,
+            0.0,
+            egui::text::TextFormat {
+                font_id: codicons::font_id(15.0),
+                color: theme.fg,
+                ..Default::default()
+            },
+        );
+        title.append(
+            &name,
+            6.0,
+            egui::text::TextFormat {
+                font_id: egui::TextStyle::Body.resolve(ui.style()),
+                color: theme.fg,
+                ..Default::default()
+            },
+        );
+
+        let header = egui::CollapsingHeader::new(title)
             .default_open(root)
             .id_source(dir.to_string_lossy().to_string());
 
@@ -74,7 +98,28 @@ impl FileTree {
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
-                    let resp = ui.selectable_label(false, fname);
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    let icon = file_icons::icon_for_extension(&ext);
+                    let (r, g, b) = if theme.is_dark() { icon.dark_color } else { icon.light_color };
+
+                    let resp = ui
+                        .horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), egui::Sense::hover());
+                            ui.painter().text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                icon.glyph,
+                                egui::FontId::new(15.0, file_icons::font_family()),
+                                egui::Color32::from_rgb(r, g, b),
+                            );
+                            ui.selectable_label(false, fname)
+                        })
+                        .inner;
                     if resp.clicked() {
                         result = Some(TreeAction::OpenFile(path.clone()));
                     }

@@ -54,49 +54,56 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// VS Code's current default light theme ("Light Modern"). Values are
+    /// the actual color tokens from `extensions/theme-defaults/themes/
+    /// light_modern.json` in the VS Code source (editor.background,
+    /// sideBar.background, focusBorder, ...), not eyeballed.
     pub fn light() -> Self {
         Self {
-            bg: Color32::from_rgb(0xf7, 0xf7, 0xf8),
-            panel_bg: Color32::from_rgb(0xef, 0xef, 0xf1),
-            titlebar_bg: Color32::from_rgb(0xe7, 0xe7, 0xea),
-            titlebar_fg: Color32::from_rgb(0x20, 0x20, 0x22),
-            sidebar_bg: Color32::from_rgb(0xf0, 0xf0, 0xf2),
-            editor_bg: Color32::from_rgb(0xff, 0xff, 0xff),
-            fg: Color32::from_rgb(0x1c, 0x1c, 0x1e),
-            fg_dim: Color32::from_rgb(0x6e, 0x6e, 0x73),
-            accent: Color32::from_rgb(0x2f, 0x6f, 0xed),
-            line_number: Color32::from_rgb(0xb0, 0xb0, 0xb5),
-            line_number_active: Color32::from_rgb(0x50, 0x50, 0x55),
-            selection: Color32::from_rgba_premultiplied(0x2f, 0x6f, 0xed, 60),
-            cursor: Color32::from_rgb(0x1c, 0x1c, 0x1e),
-            button_hover: Color32::from_rgb(0xe0, 0xe0, 0xe4),
-            button_active: Color32::from_rgb(0xd4, 0xd4, 0xda),
-            border: Color32::from_rgb(0xd8, 0xd8, 0xdc),
+            bg: Color32::from_rgb(0xf8, 0xf8, 0xf8),               // tab.inactiveBackground / editorGroupHeader.tabsBackground
+            panel_bg: Color32::from_rgb(0xff, 0xff, 0xff),         // editor.background / tab.activeBackground
+            titlebar_bg: Color32::from_rgb(0xf8, 0xf8, 0xf8),      // titleBar.activeBackground
+            titlebar_fg: Color32::from_rgb(0x1e, 0x1e, 0x1e),      // titleBar.activeForeground
+            sidebar_bg: Color32::from_rgb(0xf8, 0xf8, 0xf8),       // sideBar.background / activityBar.background
+            editor_bg: Color32::from_rgb(0xff, 0xff, 0xff),        // editor.background
+            fg: Color32::from_rgb(0x3b, 0x3b, 0x3b),               // editor.foreground
+            fg_dim: Color32::from_rgb(0x61, 0x61, 0x61),           // tab.inactiveForeground / activityBar.inactiveForeground
+            accent: Color32::from_rgb(0x00, 0x5f, 0xb8),           // focusBorder / button.background
+            line_number: Color32::from_rgb(0x6e, 0x76, 0x81),      // editorLineNumber.foreground
+            line_number_active: Color32::from_rgb(0x17, 0x11, 0x84), // editorLineNumber.activeForeground
+            selection: Color32::from_rgba_premultiplied(0x00, 0x5f, 0xb8, 55),
+            cursor: Color32::from_rgb(0x3b, 0x3b, 0x3b),
+            button_hover: Color32::from_rgb(0xe8, 0xe8, 0xe8),
+            button_active: Color32::from_rgb(0xdc, 0xdc, 0xdc),
+            border: Color32::from_rgb(0xe5, 0xe5, 0xe5),           // tab.border
             error: Color32::from_rgb(0xd9, 0x3a, 0x3a),
-            close_hover: Color32::from_rgb(0xe8, 0x4a, 0x4a),
+            close_hover: Color32::from_rgb(0xc4, 0x2b, 0x1c),      // Windows-style close-hover red, matches VS Code's own title bar
         }
     }
 
+    /// VS Code's current default dark theme ("Dark Modern"). Values are
+    /// the actual color tokens from `extensions/theme-defaults/themes/
+    /// dark_modern.json` in the VS Code source.
     pub fn dark() -> Self {
         Self {
-            bg: Color32::from_rgb(0x1e, 0x1e, 0x1e),
-            panel_bg: Color32::from_rgb(0x25, 0x25, 0x26),
-            titlebar_bg: Color32::from_rgb(0x23, 0x21, 0x21),
-            titlebar_fg: Color32::from_rgb(0xe4, 0xe4, 0xe6),
-            sidebar_bg: Color32::from_rgb(0x21, 0x21, 0x22),
-            editor_bg: Color32::from_rgb(0x1e, 0x1e, 0x1e),
-            fg: Color32::from_rgb(0xd4, 0xd4, 0xd6),
-            fg_dim: Color32::from_rgb(0x8a, 0x8a, 0x8f),
-            accent: Color32::from_rgb(0x56, 0x9c, 0xd6),
-            line_number: Color32::from_rgb(0x5a, 0x5a, 0x5e),
-            line_number_active: Color32::from_rgb(0xc0, 0xc0, 0xc4),
+            bg: Color32::from_rgb(0x18, 0x18, 0x18),               // tab.inactiveBackground / editorGroupHeader.tabsBackground
+            panel_bg: Color32::from_rgb(0x1f, 0x1f, 0x1f),         // editor.background / tab.activeBackground
+            titlebar_bg: Color32::from_rgb(0x18, 0x18, 0x18),      // titleBar.activeBackground
+            titlebar_fg: Color32::from_rgb(0xcc, 0xcc, 0xcc),      // titleBar.activeForeground
+            sidebar_bg: Color32::from_rgb(0x18, 0x18, 0x18),       // sideBar.background / activityBar.background
+            editor_bg: Color32::from_rgb(0x1f, 0x1f, 0x1f),        // editor.background
+            fg: Color32::from_rgb(0xcc, 0xcc, 0xcc),               // editor.foreground
+            fg_dim: Color32::from_rgb(0x9d, 0x9d, 0x9d),           // tab.inactiveForeground
+            accent: Color32::from_rgb(0x00, 0x78, 0xd4),           // focusBorder / button.background
+            line_number: Color32::from_rgb(0x6e, 0x76, 0x81),      // editorLineNumber.foreground
+            line_number_active: Color32::from_rgb(0xcc, 0xcc, 0xcc), // editorLineNumber.activeForeground
             selection: Color32::from_rgba_premultiplied(0x26, 0x4f, 0x78, 180),
-            cursor: Color32::from_rgb(0xe4, 0xe4, 0xe6),
-            button_hover: Color32::from_rgb(0x33, 0x33, 0x35),
-            button_active: Color32::from_rgb(0x3d, 0x3d, 0x40),
-            border: Color32::from_rgb(0x33, 0x33, 0x35),
+            cursor: Color32::from_rgb(0xcc, 0xcc, 0xcc),
+            button_hover: Color32::from_rgb(0x2a, 0x2a, 0x2a),
+            button_active: Color32::from_rgb(0x33, 0x33, 0x33),
+            border: Color32::from_rgb(0x2b, 0x2b, 0x2b),           // tab.border / panel.border
             error: Color32::from_rgb(0xe0, 0x6c, 0x6c),
-            close_hover: Color32::from_rgb(0xc4, 0x3b, 0x3b),
+            close_hover: Color32::from_rgb(0xc4, 0x2b, 0x1c),      // Windows-style close-hover red, matches VS Code's own title bar
         }
     }
 

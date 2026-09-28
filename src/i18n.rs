@@ -82,6 +82,18 @@ pub fn t(lang: Lang, key: &'static str) -> &'static str {
         (Ru, "toolbar.settings") => "Настройки",
         (En, "toolbar.settings") => "Settings",
 
+        // ---- title bar "File" menu / activity bar ----
+        (Ru, "menu.file") => "Файл",
+        (En, "menu.file") => "File",
+        (Ru, "menu.new_tab") => "Новая вкладка",
+        (En, "menu.new_tab") => "New Tab",
+        (Ru, "menu.exit") => "Выход",
+        (En, "menu.exit") => "Exit",
+        (Ru, "activity.explorer") => "Проводник",
+        (En, "activity.explorer") => "Explorer",
+        (Ru, "file_tree.empty_hint") => "Вы ещё не открыли папку.",
+        (En, "file_tree.empty_hint") => "You have not yet opened a folder.",
+
         // ---- sidebar / tabs ----
         (Ru, "sidebar.files_header") => "ФАЙЛЫ",
         (En, "sidebar.files_header") => "FILES",

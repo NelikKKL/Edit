@@ -1,0 +1,11 @@
+codicon.ttf is a SUBSET (7 glyphs: files, search, settings-gear, folder,
+folder-opened, file, add) of the Codicons icon font, built from the official
+SVG sources and codepoints in https://github.com/microsoft/vscode-codicons
+(src/icons/*.svg, src/template/mapping.json). The upstream prebuilt
+dist/codicon.ttf is not checked into that repo, so the subset was generated
+with fontTools; glyph outlines are unchanged apart from being converted
+from SVG paths to TrueType quadratic curves.
+
+Codicons: Copyright (c) Microsoft Corporation.
+Icons are licensed under Creative Commons Attribution 4.0 International
+(CC BY 4.0): https://creativecommons.org/licenses/by/4.0/

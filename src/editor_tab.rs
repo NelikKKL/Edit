@@ -1,6 +1,17 @@
 use egui::text::LayoutJob;
 use egui::Color32;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Raster image extensions this app can preview inline (see
+/// `EditorTab::from_image`) instead of trying to open as text. Kept in one
+/// place and imported by both `EditApp::open_path` and the file tree's
+/// icon-picking so the two lists never drift apart. SVG is deliberately
+/// excluded: it's a vector format the `image` crate can't decode, so it
+/// still opens as plain text like before.
+pub fn is_image_extension(ext: &str) -> bool {
+    matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "bmp" | "ico" | "webp")
+}
 
 /// Files at or above this size get a few extra performance safeguards:
 /// syntax highlighting starts out disabled for them (re-tokenizing a huge
@@ -143,6 +154,15 @@ pub struct EditorTab {
     /// Reused across frames when nothing that affects it has changed; see
     /// `HighlightCache` docs.
     pub highlight_cache: Option<HighlightCache>,
+
+    /// `Some` for an image-preview tab (see `from_image`), `None` for an
+    /// ordinary text tab. `content` stays empty and unused on these —
+    /// images aren't edited, so `dirty`/`save` never apply to them either.
+    pub image_bytes: Option<Arc<[u8]>>,
+    /// Uploaded lazily by `EditApp::editor` the first time this tab is
+    /// actually drawn: building a `TextureHandle` needs an `egui::Context`,
+    /// which isn't available wherever a tab gets constructed.
+    pub image_texture: Option<egui::TextureHandle>,
 }
 
 impl EditorTab {
@@ -158,6 +178,8 @@ impl EditorTab {
             version: 0,
             line_count_cache: None,
             highlight_cache: None,
+            image_bytes: None,
+            image_texture: None,
         }
     }
 
@@ -179,6 +201,8 @@ impl EditorTab {
             version: 0,
             line_count_cache: None,
             highlight_cache: None,
+            image_bytes: None,
+            image_texture: None,
         }
     }
 
@@ -202,7 +226,40 @@ impl EditorTab {
             version: 0,
             line_count_cache: None,
             highlight_cache: None,
+            image_bytes: None,
+            image_texture: None,
         }
+    }
+
+    /// An image-preview tab — VS Code's own editor shows a raster image
+    /// instead of trying to open it as text; this mirrors that. See
+    /// `is_image_extension` for which extensions take this path.
+    pub fn from_image(path: PathBuf, bytes: Vec<u8>) -> Self {
+        let title = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "image".to_string());
+        let id = egui::Id::new(path.to_string_lossy().to_string());
+        Self {
+            path: Some(path),
+            title,
+            content: String::new(),
+            dirty: false,
+            id,
+            loading: false,
+            large: false,
+            version: 0,
+            line_count_cache: None,
+            highlight_cache: None,
+            image_bytes: Some(Arc::from(bytes)),
+            image_texture: None,
+        }
+    }
+
+    /// Whether this is an image-preview tab (see `from_image`) rather than
+    /// an ordinary text tab.
+    pub fn is_image(&self) -> bool {
+        self.image_bytes.is_some()
     }
 
     /// Call after directly mutating `content` outside of the normal
@@ -237,6 +294,10 @@ impl EditorTab {
     }
 
     pub fn save(&mut self) -> std::io::Result<()> {
+        if self.is_image() {
+            // Images aren't edited — nothing to write back.
+            return Ok(());
+        }
         if let Some(path) = &self.path {
             std::fs::write(path, &self.content)?;
             self.dirty = false;
@@ -245,6 +306,9 @@ impl EditorTab {
     }
 
     pub fn save_as(&mut self, path: PathBuf, lang: crate::i18n::Lang) -> std::io::Result<()> {
+        if self.is_image() {
+            return Ok(());
+        }
         std::fs::write(&path, &self.content)?;
         self.title = path
             .file_name()

@@ -1,6 +1,6 @@
 use crate::autoclose;
 use crate::custom_css;
-use crate::editor_tab::{EditorTab, HighlightCache};
+use crate::editor_tab::{is_image_extension, EditorTab, HighlightCache};
 use crate::file_tree::{FileTree, TreeAction};
 use crate::fonts::{FontsState, SystemFonts};
 use crate::search::SearchState;
@@ -188,6 +188,20 @@ impl EditApp {
             return;
         }
 
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if is_image_extension(&ext) {
+            // Images are previewed, not edited — no point reading them on a
+            // background thread the way large text files are below; a
+            // single image is never going to be big enough to matter.
+            match std::fs::read(&path) {
+                Ok(bytes) => self.insert_image_tab(path, bytes),
+                Err(e) => {
+                    self.status_message = Some(crate::i18n::open_file_error(self.lang, &e.to_string()));
+                }
+            }
+            return;
+        }
+
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         if size < ASYNC_LOAD_BYTES {
             // Small/typical file: just read it inline, it'll be
@@ -231,6 +245,18 @@ impl EditApp {
             self.active = 0;
         } else {
             self.tabs.push(EditorTab::from_path(path, content, self.lang));
+            self.active = self.tabs.len() - 1;
+        }
+    }
+
+    /// Same idea as `insert_loaded_tab`, for an image-preview tab.
+    fn insert_image_tab(&mut self, path: PathBuf, bytes: Vec<u8>) {
+        let tab = EditorTab::from_image(path, bytes);
+        if self.tabs.len() == 1 && self.tabs[0].path.is_none() && !self.tabs[0].dirty && self.tabs[0].content.is_empty() {
+            self.tabs[0] = tab;
+            self.active = 0;
+        } else {
+            self.tabs.push(tab);
             self.active = self.tabs.len() - 1;
         }
     }
@@ -296,6 +322,10 @@ impl EditApp {
 
     fn save_tab(&mut self, idx: usize) {
         let Some(tab) = self.tabs.get_mut(idx) else { return };
+        if tab.is_image() {
+            // Nothing to save — images are previewed, not edited.
+            return;
+        }
         if tab.path.is_some() {
             if let Err(e) = tab.save() {
                 self.status_message = Some(crate::i18n::save_error(self.lang, &e.to_string()));
@@ -308,6 +338,10 @@ impl EditApp {
     }
 
     fn save_tab_as(&mut self, idx: usize) {
+        if self.tabs.get(idx).is_some_and(|t| t.is_image()) {
+            // Nothing to save — images are previewed, not edited.
+            return;
+        }
         let lang = self.lang;
         if let Some(path) = rfd::FileDialog::new().set_title(self.t("dialog.save_as")).save_file() {
             if let Some(tab) = self.tabs.get_mut(idx) {
@@ -379,7 +413,7 @@ impl EditApp {
 
     fn install_font(&mut self, ctx: &egui::Context) {
         let Some(family) = self.settings.font_family.clone() else {
-            ctx.set_fonts(egui::FontDefinitions::default());
+            ctx.set_fonts(with_icon_fonts(egui::FontDefinitions::default()));
             self.font_install_pending = false;
             return;
         };
@@ -410,7 +444,7 @@ impl EditApp {
             self.status_message = Some(crate::i18n::font_not_found(self.lang, &family));
         }
         drop(state);
-        ctx.set_fonts(defs);
+        ctx.set_fonts(with_icon_fonts(defs));
         self.font_install_pending = false;
     }
 
@@ -504,6 +538,41 @@ impl EditApp {
 
     // -------------------------------------------------------------- panels
 
+    /// VS Code puts file actions (New/Open/Save/...) in the "File" menu
+    /// rather than as toolbar buttons; this app has a custom, undecorated
+    /// title bar instead of a native menu bar, so the menu lives there.
+    fn file_menu(&mut self, ui: &mut egui::Ui) {
+        let label = RichText::new(self.t("menu.file")).color(self.theme.titlebar_fg);
+        ui.menu_button(label, |ui| {
+            if ui.button(self.t("menu.new_tab")).clicked() {
+                self.new_tab();
+                ui.close_menu();
+            }
+            if ui.button(self.t("toolbar.open")).clicked() {
+                self.open_file_dialog();
+                ui.close_menu();
+            }
+            if ui.button(self.t("toolbar.folder")).clicked() {
+                self.open_folder_dialog();
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button(self.t("toolbar.save")).clicked() {
+                self.save_tab(self.active);
+                ui.close_menu();
+            }
+            if ui.button(self.t("dialog.save_as")).clicked() {
+                self.save_tab_as(self.active);
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button(self.t("menu.exit")).clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                ui.close_menu();
+            }
+        });
+    }
+
     fn title_bar(&mut self, ctx: &egui::Context) {
         let height = 34.0;
         egui::TopBottomPanel::top("title_bar")
@@ -527,6 +596,8 @@ impl EditApp {
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
                     ui.label(RichText::new("edit").color(self.theme.titlebar_fg).strong());
+                    ui.add_space(6.0);
+                    self.file_menu(ui);
                     if let Some(tab) = self.tabs.get(self.active) {
                         let dirty = if tab.dirty { " *" } else { "" };
                         ui.label(RichText::new(format!("— {}{}", tab.title, dirty)).color(self.theme.fg_dim));
@@ -543,54 +614,6 @@ impl EditApp {
                         }
                         if window_button(ui, "_", self.theme.button_hover, self.theme.titlebar_fg).clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                        }
-                    });
-                });
-            });
-    }
-
-    fn toolbar(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("toolbar")
-            .exact_height(42.0)
-            .frame(
-                Frame::none()
-                    .fill(self.theme.panel_bg)
-                    .inner_margin(Margin::symmetric(10.0, 5.0))
-                    .stroke(Stroke::new(1.0_f32, self.theme.border)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    if ui.button(self.t("toolbar.open")).clicked() {
-                        self.open_file_dialog();
-                    }
-                    if ui.button(self.t("toolbar.folder")).clicked() {
-                        self.open_folder_dialog();
-                    }
-                    if ui.button(self.t("toolbar.save")).clicked() {
-                        self.save_tab(self.active);
-                    }
-                    if ui.button(self.t("dialog.save_as")).clicked() {
-                        self.save_tab_as(self.active);
-                    }
-                    ui.separator();
-                    if ui.button(self.t("toolbar.search")).clicked() {
-                        self.search.open();
-                    }
-                    if ui
-                        .selectable_label(self.settings.show_sidebar, self.t("toolbar.tree"))
-                        .clicked()
-                    {
-                        self.settings.show_sidebar = !self.settings.show_sidebar;
-                        self.settings.save();
-                    }
-                    ui.separator();
-                    if ui.button("+").on_hover_text(self.t("toolbar.new_tab_tooltip")).clicked() {
-                        self.new_tab();
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button(self.t("toolbar.settings")).clicked() {
-                            self.show_settings = true;
                         }
                     });
                 });
@@ -626,6 +649,10 @@ impl EditApp {
                                     });
                                 });
                         }
+                        let plus = ui.add(egui::Button::new(crate::codicons::rich(crate::codicons::ADD, 14.0)).frame(false));
+                        if plus.on_hover_text(self.t("toolbar.new_tab_tooltip")).clicked() {
+                            self.new_tab();
+                        }
                         if let Some(i) = to_activate {
                             self.active = i;
                         }
@@ -633,6 +660,43 @@ impl EditApp {
                             self.request_close_tab(i);
                         }
                     });
+                });
+            });
+    }
+
+    /// VS Code's Activity Bar: the narrow icon strip to the left of the
+    /// Sidebar. Only icons for things this app actually does — Explorer
+    /// (toggles the file tree sidebar) and Search (opens the in-editor
+    /// find widget, same as Ctrl+F) up top, Settings pinned to the bottom.
+    fn activity_bar(&mut self, ctx: &egui::Context) {
+        let theme = self.theme.clone();
+        egui::SidePanel::left("activity_bar")
+            .exact_width(46.0)
+            .resizable(false)
+            .frame(Frame::none().fill(theme.sidebar_bg))
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.add_space(6.0);
+                    let explorer_tip = self.t("activity.explorer");
+                    if activity_icon(ui, &theme, crate::codicons::FILES, self.settings.show_sidebar, explorer_tip).clicked() {
+                        self.settings.show_sidebar = !self.settings.show_sidebar;
+                        self.settings.save();
+                    }
+                    let search_tip = self.t("toolbar.search");
+                    if activity_icon(ui, &theme, crate::codicons::SEARCH, false, search_tip).clicked() {
+                        self.search.open();
+                    }
+
+                    // Pin the settings icon to the bottom of the strip.
+                    let reserved_for_bottom_icon = 46.0;
+                    let gap = ui.available_height() - reserved_for_bottom_icon;
+                    if gap > 0.0 {
+                        ui.add_space(gap);
+                    }
+                    let settings_tip = self.t("toolbar.settings");
+                    if activity_icon(ui, &theme, crate::codicons::SETTINGS_GEAR, self.show_settings, settings_tip).clicked() {
+                        self.show_settings = true;
+                    }
                 });
             });
     }
@@ -652,8 +716,31 @@ impl EditApp {
                     .inner_margin(Margin::same(8.0)),
             )
             .show(ctx, |ui| {
-                ui.label(RichText::new(self.t("sidebar.files_header")).color(theme.fg_dim).small());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(self.t("activity.explorer").to_uppercase()).color(theme.fg_dim).small());
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        let folder_btn = ui.add(egui::Button::new(crate::codicons::rich(crate::codicons::FOLDER_OPENED, 15.0)).frame(false));
+                        if folder_btn.on_hover_text(self.t("toolbar.folder")).clicked() {
+                            self.open_folder_dialog();
+                        }
+                        let file_btn = ui.add(egui::Button::new(crate::codicons::rich(crate::codicons::FILE, 15.0)).frame(false));
+                        if file_btn.on_hover_text(self.t("toolbar.open")).clicked() {
+                            self.open_file_dialog();
+                        }
+                    });
+                });
                 ui.add_space(4.0);
+
+                if self.file_tree.root.is_none() {
+                    ui.add_space(16.0);
+                    ui.label(RichText::new(self.t("file_tree.empty_hint")).color(theme.fg_dim).small());
+                    ui.add_space(8.0);
+                    if ui.button(self.t("toolbar.folder")).clicked() {
+                        self.open_folder_dialog();
+                    }
+                    return;
+                }
+
                 match self.file_tree.ui(ui, &theme, self.lang) {
                     TreeAction::OpenFile(path) => self.open_path(path),
                     TreeAction::None => {}
@@ -680,6 +767,11 @@ impl EditApp {
                             ui.weak(self.t("editor.loading_file"));
                         });
                     });
+                    return;
+                }
+
+                if self.tabs[idx].is_image() {
+                    self.image_view(ui, ctx, idx);
                     return;
                 }
 
@@ -961,6 +1053,61 @@ impl EditApp {
             });
     }
 
+    /// Renders an image-preview tab: decode + upload the texture once
+    /// (cached on the tab itself in `image_texture`, same idea as
+    /// `highlight_cache`), then show it centered and scaled down to fit
+    /// the pane if it's bigger than the available space — mirrors what
+    /// VS Code's own built-in image preview does for a raster image tab.
+    fn image_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, idx: usize) {
+        let theme = self.theme.clone();
+
+        if self.tabs[idx].image_texture.is_none() {
+            if let Some(bytes) = self.tabs[idx].image_bytes.clone() {
+                match image::load_from_memory(&bytes) {
+                    Ok(decoded) => {
+                        let decoded = decoded.into_rgba8();
+                        let (w, h) = decoded.dimensions();
+                        let pixels = decoded.into_raw();
+                        let color_image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &pixels);
+                        let texture = ctx.load_texture(format!("image-tab-{idx}"), color_image, egui::TextureOptions::LINEAR);
+                        self.tabs[idx].image_texture = Some(texture);
+                    }
+                    Err(e) => {
+                        self.status_message = Some(crate::i18n::open_file_error(self.lang, &e.to_string()));
+                        // Don't retry the decode every single frame on a
+                        // corrupt/unsupported file.
+                        self.tabs[idx].image_bytes = None;
+                    }
+                }
+            }
+        }
+
+        let Some(texture) = self.tabs[idx].image_texture.clone() else {
+            return;
+        };
+
+        let available = ui.available_size();
+        let tex_size = texture.size_vec2();
+        let scale = if tex_size.x > 0.0 && tex_size.y > 0.0 {
+            (available.x / tex_size.x).min(available.y / tex_size.y).min(1.0)
+        } else {
+            1.0
+        };
+        let shown = tex_size * scale;
+
+        ui.allocate_ui_with_layout(available, egui::Layout::top_down(Align::Center), |ui| {
+            let top_pad = ((available.y - shown.y - 24.0) / 2.0).max(0.0);
+            ui.add_space(top_pad);
+            ui.add(egui::Image::new(&texture).max_size(shown));
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!("{} × {}", tex_size.x as i32, tex_size.y as i32))
+                    .color(theme.fg_dim)
+                    .small(),
+            );
+        });
+    }
+
     /// Byte ranges of every match of the current search query in the active
     /// tab, recomputed only when the tab, its content, the query, or the
     /// case-sensitivity toggle actually changed since the last call —
@@ -987,7 +1134,7 @@ impl EditApp {
             .exact_height(24.0)
             .frame(
                 Frame::none()
-                    .fill(self.theme.panel_bg)
+                    .fill(self.theme.sidebar_bg)
                     .inner_margin(Margin::symmetric(10.0, 3.0)),
             )
             .show(ctx, |ui| {
@@ -1028,7 +1175,12 @@ impl EditApp {
             .collapsible(false)
             .resizable(true)
             .default_size([300.0, 110.0])
-            .anchor(Align2::RIGHT_TOP, egui::vec2(-16.0, 78.0))
+            // Anchored just below the title bar (34px) + tab bar (30px), the
+            // way VS Code's own Find widget sits right under the tab strip
+            // rather than the very top of the window. Was 78px when there
+            // was still a 42px toolbar between them; recalibrated now that
+            // it's gone.
+            .anchor(Align2::RIGHT_TOP, egui::vec2(-16.0, 72.0))
             .frame(
                 Frame::window(&ctx.style())
                     .fill(theme.panel_bg)
@@ -1309,10 +1461,10 @@ impl eframe::App for EditApp {
         self.handle_dropped_files(ctx);
 
         self.title_bar(ctx);
-        self.toolbar(ctx);
-        self.tab_bar(ctx);
         self.status_bar(ctx);
+        self.activity_bar(ctx);
         self.sidebar(ctx);
+        self.tab_bar(ctx);
         self.editor(ctx);
         self.search_window(ctx);
         self.settings_window(ctx);
@@ -1322,6 +1474,28 @@ impl eframe::App for EditApp {
 
 // -------------------------------------------------------------- free fns
 
+/// Registers the embedded icon fonts — Seti (file-type icons, see
+/// `file_icons.rs`) and Codicons (UI icons, see `codicons.rs`) — each under
+/// its own dedicated font family, without touching the regular text
+/// fallback chains: they're only ever requested explicitly. Wraps whichever
+/// `FontDefinitions` `install_font` is about to hand to `ctx.set_fonts`, so
+/// the icon fonts survive switching the editor's own font.
+fn with_icon_fonts(mut defs: egui::FontDefinitions) -> egui::FontDefinitions {
+    defs.font_data.insert(
+        crate::file_icons::FONT_NAME.to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/seti-icons.ttf")),
+    );
+    defs.families
+        .insert(crate::file_icons::font_family(), vec![crate::file_icons::FONT_NAME.to_owned()]);
+    defs.font_data.insert(
+        crate::codicons::FONT_NAME.to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/codicon.ttf")),
+    );
+    defs.families
+        .insert(crate::codicons::font_family(), vec![crate::codicons::FONT_NAME.to_owned()]);
+    defs
+}
+
 fn window_button(ui: &mut egui::Ui, symbol: &str, hover_bg: Color32, fg: Color32) -> egui::Response {
     let size = egui::vec2(44.0, 34.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
@@ -1330,6 +1504,21 @@ fn window_button(ui: &mut egui::Ui, symbol: &str, hover_bg: Color32, fg: Color32
     }
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, symbol, egui::FontId::proportional(13.0), fg);
     response
+}
+
+/// One icon in the Activity Bar: a plain glyph, brighter + a left accent
+/// bar when its panel is the active one (VS Code's own convention for
+/// showing which sidebar view is open).
+fn activity_icon(ui: &mut egui::Ui, theme: &Theme, symbol: &str, active: bool, tooltip: &str) -> egui::Response {
+    let size = egui::vec2(46.0, 40.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    if active {
+        let bar = egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height()));
+        ui.painter().rect_filled(bar, 0.0, theme.accent);
+    }
+    let color = if active || response.hovered() { theme.fg } else { theme.fg_dim };
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, symbol, crate::codicons::font_id(22.0), color);
+    response.on_hover_text(tooltip)
 }
 
 fn line_number_gutter(ui: &mut egui::Ui, theme: &Theme, line_count: usize, font_id: egui::FontId) {
