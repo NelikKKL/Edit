@@ -6,6 +6,7 @@ use crate::fonts::{FontsState, SystemFonts};
 use crate::search::SearchState;
 use crate::settings::Settings;
 use crate::syntax_highlight::Highlighter;
+use crate::terminal::Terminal;
 use crate::theme::{Theme, ThemeKind};
 use egui::{Align, Align2, Color32, Frame, Margin, RichText, Sense, Stroke};
 use std::cell::RefCell;
@@ -16,6 +17,17 @@ use std::sync::{mpsc, Arc, Mutex};
 /// blocking the UI thread inside `open_path`, so opening a big file never
 /// freezes the window (a placeholder tab is shown immediately instead).
 const ASYNC_LOAD_BYTES: u64 = 2 * 1024 * 1024; // 2 MB
+
+/// Extra rows rendered above/below the actually-visible range in
+/// `EditApp::large_file_view`, so a fast scroll doesn't flash blank space
+/// while the next batch of rows lays out.
+const LARGE_FILE_OVERSCAN_ROWS: usize = 10;
+/// A single line longer than this (in chars) gets truncated in
+/// `large_file_view` rather than laid out in full — guards against the
+/// pathological case of a huge file that's one gigantic line (minified
+/// JS/JSON, a log line, ...), which `LARGE_FILE_BYTES` alone doesn't catch
+/// since that's a whole-file size check, not a per-line one.
+const MAX_LARGE_LINE_CHARS: usize = 4000;
 
 /// One in-flight background file read, tracked so `EditApp` can poll it
 /// each frame without blocking.
@@ -157,6 +169,15 @@ pub struct EditApp {
     /// this the highlight vanishes as soon as the menu opens.
     context_menu_open: bool,
 
+    /// Integrated terminal panel (VS Code's Ctrl+`): one or more command
+    /// sessions, shown at the bottom of the editor area when `show_terminal`
+    /// is set.
+    terminals: Vec<Terminal>,
+    active_terminal: usize,
+    show_terminal: bool,
+    terminal_focus_pending: bool,
+    terminal_serial: usize,
+
     /// Settings editor state: the search box text and the selected TOC entry.
     settings_search: String,
     settings_cat: SettingsCat,
@@ -206,6 +227,11 @@ impl EditApp {
             cursor_cache: None,
             last_selection: None,
             context_menu_open: false,
+            terminals: Vec::new(),
+            active_terminal: 0,
+            show_terminal: false,
+            terminal_focus_pending: false,
+            terminal_serial: 0,
             settings_search: String::new(),
             settings_cat: SettingsCat::Common,
             css_status: None,
@@ -530,10 +556,13 @@ impl EditApp {
                 self.request_close_tab(self.active);
             }
             if i.consume_key(Modifiers::CTRL, Key::F) {
-                self.search.open();
+                self.try_open_search();
             }
             if i.consume_key(Modifiers::CTRL, Key::Comma) {
                 self.open_settings_tab();
+            }
+            if i.consume_key(Modifiers::CTRL, Key::Backtick) {
+                self.toggle_terminal();
             }
             if i.consume_key(Modifiers::NONE, Key::F11) {
                 self.fullscreen = !self.fullscreen;
@@ -630,6 +659,20 @@ impl EditApp {
         });
     }
 
+    fn terminal_menu(&mut self, ui: &mut egui::Ui) {
+        let label = RichText::new(self.t("menu.terminal")).color(self.theme.titlebar_fg);
+        ui.menu_button(label, |ui| {
+            if ui.button(self.t("terminal.new")).clicked() {
+                self.new_terminal();
+                ui.close_menu();
+            }
+            if ui.button(self.t("terminal.toggle")).clicked() {
+                self.toggle_terminal();
+                ui.close_menu();
+            }
+        });
+    }
+
     fn title_bar(&mut self, ctx: &egui::Context) {
         let height = 34.0;
         egui::TopBottomPanel::top("title_bar")
@@ -655,21 +698,22 @@ impl EditApp {
                     ui.label(RichText::new("edit").color(self.theme.titlebar_fg).strong());
                     ui.add_space(6.0);
                     self.file_menu(ui);
+                    self.terminal_menu(ui);
                     if let Some(tab) = self.tabs.get(self.active) {
                         let dirty = if tab.dirty { " *" } else { "" };
                         ui.label(RichText::new(format!("— {}{}", tab.title, dirty)).color(self.theme.fg_dim));
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if window_button(ui, "X", self.theme.close_hover, self.theme.titlebar_fg).clicked() {
+                        if window_button(ui, crate::codicons::CHROME_CLOSE, self.theme.close_hover, self.theme.titlebar_fg).clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                        let sym = if maximized { "[ ]" } else { "[]" };
+                        let sym = if maximized { crate::codicons::CHROME_RESTORE } else { crate::codicons::CHROME_MAXIMIZE };
                         if window_button(ui, sym, self.theme.button_hover, self.theme.titlebar_fg).clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                         }
-                        if window_button(ui, "_", self.theme.button_hover, self.theme.titlebar_fg).clicked() {
+                        if window_button(ui, crate::codicons::CHROME_MINIMIZE, self.theme.button_hover, self.theme.titlebar_fg).clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                     });
@@ -694,13 +738,16 @@ impl EditApp {
                                 .inner_margin(Margin::symmetric(8.0, 4.0))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
-                                        let dirty = if tab.dirty { " *" } else { "" };
-                                        let text = RichText::new(format!("{}{}", tab.title, dirty))
+                                        let text = RichText::new(tab.title.as_str())
                                             .color(if selected { self.theme.fg } else { self.theme.fg_dim });
                                         if ui.selectable_label(false, text).clicked() {
                                             to_activate = Some(i);
                                         }
-                                        if ui.small_button("X").clicked() {
+                                        // Like VS Code: a filled dot marks unsaved changes,
+                                        // a close cross otherwise; both close the tab.
+                                        let glyph = if tab.dirty { crate::codicons::CIRCLE_FILLED } else { crate::codicons::CLOSE };
+                                        let close_btn = ui.add(egui::Button::new(crate::codicons::rich(glyph, 12.0)).frame(false));
+                                        if close_btn.clicked() {
                                             to_close = Some(i);
                                         }
                                     });
@@ -718,6 +765,136 @@ impl EditApp {
                         }
                     });
                 });
+            });
+    }
+
+    /// Ctrl+F / the Search activity-bar icon: a no-op on a tab the find
+    /// widget can't actually do anything on — the `TextEdit` it looks for
+    /// (by the active tab's id) doesn't exist for image/settings/large-file
+    /// tabs, so opening it there would just show empty, do-nothing UI.
+    fn try_open_search(&mut self) {
+        let Some(tab) = self.tabs.get(self.active) else { return };
+        if tab.is_special() || tab.large {
+            return;
+        }
+        self.search.open();
+    }
+
+    fn new_terminal(&mut self) {
+        let cwd = self
+            .file_tree
+            .root
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.terminal_serial += 1;
+        let name = format!("{} {}", Terminal::shell_name(), self.terminal_serial);
+        self.terminals.push(Terminal::new(name, cwd, self.terminal_serial));
+        self.active_terminal = self.terminals.len() - 1;
+        self.show_terminal = true;
+        self.terminal_focus_pending = true;
+    }
+
+    fn toggle_terminal(&mut self) {
+        if self.terminals.is_empty() {
+            self.new_terminal();
+            return;
+        }
+        self.show_terminal = !self.show_terminal;
+        if self.show_terminal {
+            self.terminal_focus_pending = true;
+        }
+    }
+
+    /// VS Code's integrated terminal panel: a row of terminal tabs (each a
+    /// separate shell session, see `terminal.rs`) plus New/Kill/Close, and
+    /// the active session's scrollback + input below it.
+    fn terminal_panel(&mut self, ctx: &egui::Context) {
+        if !self.show_terminal || self.terminals.is_empty() {
+            return;
+        }
+        if self.active_terminal >= self.terminals.len() {
+            self.active_terminal = self.terminals.len() - 1;
+        }
+        let theme = self.theme.clone();
+        let focus = std::mem::take(&mut self.terminal_focus_pending);
+
+        egui::TopBottomPanel::bottom("terminal_panel")
+            .resizable(true)
+            .default_height(220.0)
+            .height_range(120.0..=600.0)
+            .frame(Frame::none().fill(theme.panel_bg).stroke(Stroke::new(1.0_f32, theme.border)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(self.t("terminal.title")).color(theme.fg_dim).small());
+                    ui.add_space(10.0);
+
+                    let mut to_activate = None;
+                    let mut to_close = None;
+                    for (i, term) in self.terminals.iter().enumerate() {
+                        let selected = i == self.active_terminal;
+                        let fg = if selected { theme.fg } else { theme.fg_dim };
+                        if ui.selectable_label(selected, RichText::new(term.name.as_str()).color(fg).small()).clicked() {
+                            to_activate = Some(i);
+                        }
+                        let close = ui.add(egui::Button::new(crate::codicons::rich(crate::codicons::CLOSE, 11.0)).frame(false));
+                        if close.clicked() {
+                            to_close = Some(i);
+                        }
+                        ui.add_space(4.0);
+                    }
+                    if let Some(i) = to_activate {
+                        self.active_terminal = i;
+                        self.terminal_focus_pending = true;
+                    }
+                    if let Some(i) = to_close {
+                        self.terminals.remove(i);
+                        if self.terminals.is_empty() {
+                            self.show_terminal = false;
+                        } else if self.active_terminal >= i {
+                            self.active_terminal = self.active_terminal.saturating_sub(1);
+                        }
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        let close_panel_tip = self.t("terminal.close_panel");
+                        if ui
+                            .add(egui::Button::new(crate::codicons::rich(crate::codicons::CLOSE, 14.0)).frame(false))
+                            .on_hover_text(close_panel_tip)
+                            .clicked()
+                        {
+                            self.show_terminal = false;
+                        }
+                        ui.add_space(4.0);
+                        let kill_tip = self.t("terminal.kill");
+                        if ui
+                            .add(egui::Button::new(crate::codicons::rich(crate::codicons::TRASH, 14.0)).frame(false))
+                            .on_hover_text(kill_tip)
+                            .clicked()
+                        {
+                            if let Some(t) = self.terminals.get_mut(self.active_terminal) {
+                                t.kill();
+                            }
+                        }
+                        ui.add_space(4.0);
+                        let new_tip = self.t("terminal.new");
+                        if ui
+                            .add(egui::Button::new(crate::codicons::rich(crate::codicons::ADD, 14.0)).frame(false))
+                            .on_hover_text(new_tip)
+                            .clicked()
+                        {
+                            self.new_terminal();
+                        }
+                    });
+                });
+                ui.add_space(2.0);
+                ui.separator();
+
+                let font_size = self.settings.font_size.min(16.0);
+                if let Some(term) = self.terminals.get_mut(self.active_terminal) {
+                    term.ui(ui, &theme, font_size, focus);
+                }
             });
     }
 
@@ -741,7 +918,7 @@ impl EditApp {
                     }
                     let search_tip = self.t("toolbar.search");
                     if activity_icon(ui, &theme, crate::codicons::SEARCH, false, search_tip).clicked() {
-                        self.search.open();
+                        self.try_open_search();
                     }
 
                     // Pin the settings icon to the bottom of the strip.
@@ -835,6 +1012,11 @@ impl EditApp {
 
                 if self.tabs[idx].is_image() {
                     self.image_view(ui, ctx, idx);
+                    return;
+                }
+
+                if self.tabs[idx].large {
+                    self.large_file_view(ui, idx);
                     return;
                 }
 
@@ -1203,6 +1385,68 @@ impl EditApp {
                     .color(theme.fg_dim)
                     .small(),
             );
+        });
+    }
+
+    /// Read-only, virtualized viewer for files at/above `LARGE_FILE_BYTES`
+    /// (see that constant's docs). The problem this replaces: even with
+    /// syntax highlighting switched off, handing the *whole* file to a
+    /// normal `TextEdit` still lays it out into one giant `Galley` — glyph
+    /// positions for every character in the file — every single frame,
+    /// which is what actually turns a 10 MB file into roughly a gigabyte of
+    /// RAM. This instead only ever lays out the handful of lines actually
+    /// on screen, using `ScrollArea::show_rows` for virtualization plus a
+    /// small overscan (`LARGE_FILE_OVERSCAN_ROWS`) above/below so fast
+    /// scrolling doesn't flash blank space, and a cached byte-offset index
+    /// (`EditorTab::line_offsets`) so jumping to an arbitrary row doesn't
+    /// need to rescan the file from the start. The tradeoff for staying in
+    /// this fast path: these files are view/select/copy-only here (no
+    /// in-place editing, no word wrap, no find) — see the notice line this
+    /// draws at the top of the tab, and the chat reply this shipped with
+    /// for the reasoning.
+    fn large_file_view(&mut self, ui: &mut egui::Ui, idx: usize) {
+        let theme = self.theme.clone();
+        let lang = self.lang;
+
+        self.tabs[idx].ensure_line_offsets();
+        let total_rows = self.tabs[idx].line_offsets.as_ref().map_or(1, |o| o.len().max(1));
+        let byte_len = self.tabs[idx].content.len();
+
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label(RichText::new(crate::i18n::large_file_notice(lang, byte_len)).color(theme.fg_dim).small());
+        });
+        ui.add_space(4.0);
+        ui.separator();
+
+        let font_id = egui::FontId::monospace(self.settings.font_size);
+        let row_height = ui.fonts(|f| f.row_height(&font_id));
+        let gutter_w = (total_rows.to_string().len() as f32) * (self.settings.font_size * 0.62) + 12.0;
+
+        egui::ScrollArea::both().auto_shrink([false, false]).show_rows(ui, row_height, total_rows, |ui, row_range| {
+            let start = row_range.start.saturating_sub(LARGE_FILE_OVERSCAN_ROWS);
+            let end = (row_range.end + LARGE_FILE_OVERSCAN_ROWS).min(total_rows);
+            for row in start..end {
+                let Some((s, e)) = self.tabs[idx].line_range(row) else { continue };
+                let raw = &self.tabs[idx].content[s..e];
+                let raw = raw.strip_suffix('\n').unwrap_or(raw);
+                let raw = raw.strip_suffix('\r').unwrap_or(raw);
+
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.add_sized(
+                        [gutter_w, row_height],
+                        egui::Label::new(RichText::new((row + 1).to_string()).font(font_id.clone()).color(theme.line_number)),
+                    );
+                    if raw.chars().count() > MAX_LARGE_LINE_CHARS {
+                        let mut shown: String = raw.chars().take(MAX_LARGE_LINE_CHARS).collect();
+                        shown.push('…');
+                        ui.label(RichText::new(shown).font(font_id.clone()).color(theme.fg));
+                    } else {
+                        ui.label(RichText::new(raw).font(font_id.clone()).color(theme.fg));
+                    }
+                });
+            }
         });
     }
 
@@ -1824,11 +2068,16 @@ impl eframe::App for EditApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
         self.handle_dropped_files(ctx);
 
+        let lang = self.lang;
+        for term in &mut self.terminals {
+            term.poll(lang);
+        }
         self.title_bar(ctx);
         self.status_bar(ctx);
         self.activity_bar(ctx);
         self.sidebar(ctx);
         self.tab_bar(ctx);
+        self.terminal_panel(ctx);
         self.editor(ctx);
         self.search_window(ctx);
         self.close_confirm_modal(ctx);
@@ -1865,7 +2114,7 @@ fn window_button(ui: &mut egui::Ui, symbol: &str, hover_bg: Color32, fg: Color32
     if response.hovered() {
         ui.painter().rect_filled(rect, 0.0, hover_bg);
     }
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, symbol, egui::FontId::proportional(13.0), fg);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, symbol, crate::codicons::font_id(15.0), fg);
     response
 }
 

@@ -1,5 +1,4 @@
-codicon.ttf is a SUBSET (7 glyphs: files, search, settings-gear, folder,
-folder-opened, file, add) of the Codicons icon font, built from the official
+codicon.ttf is a SUBSET (34 glyphs, listed in src/codicons.rs) of the Codicons icon font, built from the official
 SVG sources and codepoints in https://github.com/microsoft/vscode-codicons
 (src/icons/*.svg, src/template/mapping.json). The upstream prebuilt
 dist/codicon.ttf is not checked into that repo, so the subset was generated

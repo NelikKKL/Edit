@@ -246,6 +246,21 @@ pub fn t(lang: Lang, key: &'static str) -> &'static str {
         (Ru, "set.syntax.desc") => "Определяет, раскрашивается ли код в соответствии с его языком.",
         (En, "set.syntax.desc") => "Controls whether code is colored according to its language.",
 
+        (Ru, "terminal.title") => "ТЕРМИНАЛ",
+        (En, "terminal.title") => "TERMINAL",
+        (Ru, "menu.terminal") => "Терминал",
+        (En, "menu.terminal") => "Terminal",
+        (Ru, "terminal.new") => "Новый терминал",
+        (En, "terminal.new") => "New Terminal",
+        (Ru, "terminal.toggle") => "Показать/скрыть терминал",
+        (En, "terminal.toggle") => "Toggle Terminal",
+        (Ru, "terminal.kill") => "Завершить терминал",
+        (En, "terminal.kill") => "Kill Terminal",
+        (Ru, "terminal.close_panel") => "Закрыть панель",
+        (En, "terminal.close_panel") => "Close Panel",
+        (Ru, "terminal.stop") => "Остановить процесс (Ctrl+C)",
+        (En, "terminal.stop") => "Stop process (Ctrl+C)",
+
         (_, other) => other,
     }
 }
@@ -336,5 +351,24 @@ pub fn settings_found(lang: Lang, n: usize) -> String {
         Lang::Ru => format!("Найдено параметров: {n}"),
         Lang::En if n == 1 => "1 Setting Found".to_string(),
         Lang::En => format!("{n} Settings Found"),
+    }
+}
+
+pub fn terminal_exit_code(lang: Lang, code: i32) -> String {
+    match lang {
+        Lang::Ru => format!("Процесс завершился с кодом {code}"),
+        Lang::En => format!("Process exited with code {code}"),
+    }
+}
+
+pub fn large_file_notice(lang: Lang, bytes: usize) -> String {
+    let mb = bytes as f64 / (1024.0 * 1024.0);
+    match lang {
+        Lang::Ru => format!(
+            "Большой файл ({mb:.1} МБ) — только просмотр и копирование, для производительности. Перенос строк отключён."
+        ),
+        Lang::En => format!(
+            "Large file ({mb:.1} MB) — view/copy only, for performance. Word wrap is off."
+        ),
     }
 }

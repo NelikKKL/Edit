@@ -167,6 +167,11 @@ pub struct EditorTab {
     /// The built-in Settings editor (VS Code opens its settings as an
     /// editor tab too, not a dialog). `content` stays empty and unused.
     pub is_settings: bool,
+
+    /// Byte offset where each line starts (index 0 is always 0), built
+    /// lazily and cached — only ever populated for `large` tabs, see
+    /// `ensure_line_offsets`.
+    pub line_offsets: Option<Vec<usize>>,
 }
 
 impl EditorTab {
@@ -185,6 +190,7 @@ impl EditorTab {
             image_bytes: None,
             image_texture: None,
             is_settings: false,
+            line_offsets: None,
         }
     }
 
@@ -209,6 +215,7 @@ impl EditorTab {
             image_bytes: None,
             image_texture: None,
             is_settings: false,
+            line_offsets: None,
         }
     }
 
@@ -235,6 +242,7 @@ impl EditorTab {
             image_bytes: None,
             image_texture: None,
             is_settings: false,
+            line_offsets: None,
         }
     }
 
@@ -261,6 +269,7 @@ impl EditorTab {
             image_bytes: Some(Arc::from(bytes)),
             image_texture: None,
             is_settings: false,
+            line_offsets: None,
         }
     }
 
@@ -286,6 +295,7 @@ impl EditorTab {
             image_bytes: None,
             image_texture: None,
             is_settings: true,
+            line_offsets: None,
         }
     }
 
@@ -315,7 +325,35 @@ impl EditorTab {
     /// Number of lines in `content`, recomputed only when `content` has
     /// actually changed since the last call (tracked via `version`) instead
     /// of rescanning the whole buffer on every frame.
-    pub fn line_count(&mut self) -> usize {
+    /// Builds `line_offsets` if it isn't already cached. Deliberately
+    /// never invalidated by edits: only called for `large` tabs, and
+    /// `EditApp::large_file_view` never mutates those, so it only ever
+    /// needs to run once per file.
+    pub fn ensure_line_offsets(&mut self) {
+        if self.line_offsets.is_some() {
+            return;
+        }
+        let mut offsets = Vec::with_capacity(self.content.len() / 40 + 1);
+        offsets.push(0usize);
+        for (i, b) in self.content.bytes().enumerate() {
+            if b == b'\n' {
+                offsets.push(i + 1);
+            }
+        }
+        self.line_offsets = Some(offsets);
+    }
+
+    /// Byte range of line `row` (0-based), including its trailing newline
+    /// if any. `None` if `ensure_line_offsets` hasn't been called yet, or
+    /// `row` is out of range.
+    pub fn line_range(&self, row: usize) -> Option<(usize, usize)> {
+        let offsets = self.line_offsets.as_ref()?;
+        let start = *offsets.get(row)?;
+        let end = offsets.get(row + 1).copied().unwrap_or(self.content.len());
+        Some((start, end))
+    }
+
+        pub fn line_count(&mut self) -> usize {
         if let Some((v, n)) = self.line_count_cache {
             if v == self.version {
                 return n;

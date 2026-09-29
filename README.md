@@ -30,7 +30,7 @@ edit/
 ├── build.rs                           # embeds Windows resources and the icon into edit.exe
 ├── LICENSE                            # project license
 ├── README.md                          # Russian documentation
-├── ENGLISH.md                         # English documentation
+├── RU.md                        # English documentation
 │
 ├── assets/
 │   ├── icon.ico                       # Windows icon, multiple resolutions

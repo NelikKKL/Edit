@@ -13,6 +13,7 @@ mod i18n;
 mod search;
 mod settings;
 mod syntax_highlight;
+mod terminal;
 mod theme;
 
 fn main() -> eframe::Result<()> {
