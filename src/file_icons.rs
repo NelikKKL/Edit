@@ -16,7 +16,7 @@ pub struct FileIcon {
 }
 
 /// Name used both when registering the embedded font (`with_icon_fonts` in
-/// `app.rs`) and when building a `FontId` to draw one of these icons
+/// `app/theme_fonts.rs`) and when building a `FontId` to draw one of these icons
 /// (`file_tree.rs`), so the two can't drift apart.
 pub const FONT_NAME: &str = "seti_icons";
 

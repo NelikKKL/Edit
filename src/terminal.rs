@@ -83,6 +83,12 @@ impl Terminal {
         }
     }
 
+    /// Id of this session's input field, so callers can tell whether the
+    /// terminal currently has keyboard focus.
+    pub fn input_id(&self) -> egui::Id {
+        self.id
+    }
+
     pub fn is_running(&self) -> bool {
         self.rx.is_some()
     }

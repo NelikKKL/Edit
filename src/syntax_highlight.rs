@@ -185,8 +185,15 @@ fn append_with_search(
     let mut cuts: Vec<usize> = vec![0, piece.len()];
     for &(s, e) in search.ranges {
         if s < piece_end && e > piece_start {
-            let rel_s = s.saturating_sub(piece_start).min(piece.len());
-            let rel_e = e.saturating_sub(piece_start).min(piece.len());
+            let mut rel_s = s.saturating_sub(piece_start).min(piece.len());
+            let mut rel_e = e.saturating_sub(piece_start).min(piece.len());
+            // Snap to char boundaries so a slice can never split a char.
+            while !piece.is_char_boundary(rel_s) {
+                rel_s -= 1;
+            }
+            while !piece.is_char_boundary(rel_e) {
+                rel_e += 1;
+            }
             cuts.push(rel_s);
             cuts.push(rel_e);
         }

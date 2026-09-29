@@ -138,9 +138,15 @@ impl Theme {
     /// Apply this palette to egui's global `Style` (widget rounding/backgrounds/etc).
     pub fn apply_to_ctx(&self, ctx: &egui::Context) {
         let mut style = (*ctx.style()).clone();
+        let dark = luminance(self.bg) < 0.5;
+        // Start from egui's own light/dark base every time. Layering onto the
+        // *previous* theme's visuals left fields we don't set below (button
+        // `weak_bg_fill`, inactive stroke, ...) stuck on the old theme, e.g.
+        // dark button rectangles with dark text after switching Dark -> Light.
+        style.visuals = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
         let v = &mut style.visuals;
 
-        v.dark_mode = luminance(self.bg) < 0.5;
+        v.dark_mode = dark;
         v.window_fill = self.panel_bg;
         v.panel_fill = self.bg;
         v.faint_bg_color = self.panel_bg;
@@ -159,6 +165,17 @@ impl Theme {
         v.widgets.active.bg_fill = self.button_active;
         v.widgets.active.fg_stroke.color = self.fg;
         v.widgets.open.bg_fill = self.button_active;
+        // egui 0.28 buttons are filled with `weak_bg_fill`, not `bg_fill`.
+        v.widgets.noninteractive.weak_bg_fill = self.panel_bg;
+        v.widgets.inactive.weak_bg_fill = self.panel_bg;
+        v.widgets.hovered.weak_bg_fill = self.button_hover;
+        v.widgets.active.weak_bg_fill = self.button_active;
+        v.widgets.open.weak_bg_fill = self.button_active;
+        v.widgets.open.fg_stroke.color = self.fg;
+        if !dark {
+            // Light buttons on a light panel need an outline to read as buttons.
+            v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, self.border);
+        }
 
         v.window_stroke.color = self.border;
         v.widgets.noninteractive.bg_stroke.color = self.border;

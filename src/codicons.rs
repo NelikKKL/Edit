@@ -39,7 +39,7 @@ pub const WHOLE_WORD: &str = "\u{EB7E}";
 pub const REGEX: &str = "\u{EB38}";
 pub const PLAY: &str = "\u{EB2C}";
 
-/// Registered by `with_icon_fonts` in `app.rs`, under its own dedicated
+/// Registered by `with_icon_fonts` in `app/theme_fonts.rs`, under its own dedicated
 /// family so it never mixes into the regular text fallback chains.
 pub const FONT_NAME: &str = "codicon";
 
